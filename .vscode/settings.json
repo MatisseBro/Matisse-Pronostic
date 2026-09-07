@@ -1,3 +1,4 @@
 {
-  "dart.flutterSdkPath": "C:\\Cours\\Master\\Mobile\\Appli\\flutter_sdk"
+  "dart.flutterSdkPath": "C:\\Cours\\Master\\Mobile\\Appli\\flutter_sdk",
+  "dart.flutterRunAdditionalArgs": ["--device-id", "emulator-5556"]
 }

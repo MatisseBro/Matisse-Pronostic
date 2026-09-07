@@ -7,7 +7,8 @@
       "request": "launch",
       "program": "lib/main.dart",
       "args": ["--no-enable-impeller"],
-      "flutterMode": "debug"
+      "flutterMode": "debug",
+      "deviceId": "emulator-5556"
     }
   ]
 }

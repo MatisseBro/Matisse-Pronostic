@@ -12,6 +12,8 @@ import 'screens/standings_screen.dart';
 import 'services/cache_service.dart';
 import 'viewmodels/auth_view_model.dart';
 import 'viewmodels/matches_view_model.dart';
+import 'services/mqtt_service.dart';
+import 'viewmodels/mqtt_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -140,9 +142,14 @@ class MyApp extends ConsumerWidget {
   }
 }
 
-class HomePage extends ConsumerWidget {
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
+  @override
+  ConsumerState<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends ConsumerState<HomePage> {
   static const List<Widget> _pages = [
     MatchesScreen(),
     PredictionsScreen(),
@@ -152,7 +159,32 @@ class HomePage extends ConsumerWidget {
   ];
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initMqtt());
+  }
+
+  Future<void> _initMqtt() async {
+    final repo = ref.read(mqttRepositoryProvider);
+
+    // Écouter l'état de connexion MQTT
+    repo.stateStream.listen((s) {
+      if (!mounted) return;
+      ref.read(mqttConnectedProvider.notifier).state =
+          s == MqttState.connected;
+    });
+
+    // Écouter le statut de l'objet (ONLINE / OFFLINE)
+    repo.deviceStatusStream.listen((status) {
+      if (!mounted) return;
+      ref.read(deviceStatusProvider.notifier).state = status.trim();
+    });
+
+    await repo.connect();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final currentIndex = ref.watch(selectedTabProvider);
 
     return Scaffold(

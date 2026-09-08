@@ -7,17 +7,21 @@ final selectedDateProvider = StateProvider<DateTime>((ref) => DateTime.now());
 // null = "Tous les championnats"
 final leagueFilterProvider = StateProvider<String?>((ref) => null);
 
-// Onglet actif de HomePage (0=Matchs, 1=Pronostics, 2=Classements, 3=Profil)
+// Onglet actif de HomePage
 final selectedTabProvider = StateProvider<int>((ref) => 0);
 
-final matchesProvider = AsyncNotifierProvider<MatchesNotifier, Map<String, List<FootballMatch>>>(
-  MatchesNotifier.new,
-);
+final matchesProvider =
+    AsyncNotifierProvider<MatchesNotifier, MatchesResult>(MatchesNotifier.new);
 
-class MatchesNotifier extends AsyncNotifier<Map<String, List<FootballMatch>>> {
+class MatchesNotifier extends AsyncNotifier<MatchesResult> {
   @override
-  Future<Map<String, List<FootballMatch>>> build() {
+  Future<MatchesResult> build() {
     final date = ref.watch(selectedDateProvider);
     return ref.read(footballRepositoryProvider).getMatchesForDate(date);
   }
+}
+
+// Raccourci pour récupérer uniquement les données groupées (utilisé dans l'UI)
+extension MatchesResultX on MatchesResult {
+  Map<String, List<FootballMatch>> get grouped => data;
 }

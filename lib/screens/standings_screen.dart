@@ -294,6 +294,8 @@ class _StandingRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              _TeamLogo(url: entry.logoUrl, size: 22),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   entry.teamName,
@@ -335,6 +337,36 @@ class _StandingRow extends StatelessWidget {
       child: Text(text,
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+    );
+  }
+}
+
+class _TeamLogo extends StatelessWidget {
+  final String? url;
+  final double size;
+  const _TeamLogo({required this.url, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    if (url == null || url!.isEmpty) {
+      return SizedBox(
+        width: size,
+        height: size,
+        child: Icon(Icons.shield_outlined, size: size * 0.8,
+            color: Theme.of(context).colorScheme.outlineVariant),
+      );
+    }
+    return Image.network(
+      url!,
+      width: size,
+      height: size,
+      fit: BoxFit.contain,
+      errorBuilder: (_, __, ___) => SizedBox(
+        width: size,
+        height: size,
+        child: Icon(Icons.shield_outlined, size: size * 0.8,
+            color: Theme.of(context).colorScheme.outlineVariant),
+      ),
     );
   }
 }

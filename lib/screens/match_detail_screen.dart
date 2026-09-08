@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/football_match.dart';
 import '../models/prediction.dart';
+import '../viewmodels/mqtt_provider.dart';
 import '../viewmodels/predictions_view_model.dart';
 import 'add_prediction_screen.dart';
 
@@ -92,6 +93,9 @@ class MatchDetailScreen extends ConsumerWidget {
               const SizedBox(height: 16),
               _PredictionSummary(prediction: prediction, cs: cs),
             ],
+            // ── MatiMatch Display (OLED ESP32) ─────────────────────────
+            const SizedBox(height: 16),
+            _MatiMatchDisplay(match: match),
           ],
         ),
       ),
@@ -393,6 +397,210 @@ class _BetLabel extends StatelessWidget {
     }
     return const Text('Pronostiquer',
         style: TextStyle(fontWeight: FontWeight.w600));
+  }
+}
+
+// ── Section MatiMatch Display (ESP32 OLED) ────────────────────────────────────
+class _MatiMatchDisplay extends ConsumerWidget {
+  final FootballMatch match;
+  const _MatiMatchDisplay({required this.match});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cs            = Theme.of(context).colorScheme;
+    final deviceStatus  = ref.watch(deviceStatusProvider);
+    final lastSent      = ref.watch(lastSentMatchProvider);
+    final mqttConnected = ref.watch(mqttConnectedProvider);
+    final buttonEvent   = ref.watch(buttonEventProvider);
+
+    final isOnline  = deviceStatus == 'ONLINE';
+    final isUnknown = deviceStatus == 'unknown';
+
+    final isSentThisMatch = lastSent?.id == match.id;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── En-tête ──────────────────────────────────────────────────
+          Row(
+            children: [
+              Icon(Icons.tv_rounded, size: 14, color: cs.primary),
+              const SizedBox(width: 6),
+              Text(
+                'MATIMATCH DISPLAY',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.2,
+                  color: cs.primary,
+                ),
+              ),
+              const Spacer(),
+              // Statut de l'objet
+              if (!isUnknown)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: (isOnline ? Colors.green : Colors.red)
+                        .withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: (isOnline ? Colors.green : Colors.red)
+                          .withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        isOnline
+                            ? Icons.sensors_rounded
+                            : Icons.sensors_off_rounded,
+                        size: 11,
+                        color: isOnline
+                            ? Colors.green.shade700
+                            : Colors.red.shade700,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        isOnline ? 'Objet connecté' : 'Objet hors ligne',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: isOnline
+                              ? Colors.green.shade700
+                              : Colors.red.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                Text('Non connecté',
+                    style: TextStyle(fontSize: 11, color: cs.outline)),
+            ],
+          ),
+
+          const SizedBox(height: 14),
+
+          // ── Aperçu de ce qui sera affiché sur l'OLED ─────────────────
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.black,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              children: [
+                const Text(
+                  'MATIMATCH',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 2,
+                  ),
+                ),
+                const Divider(color: Colors.white30, height: 12),
+                Text(
+                  '${match.homeTeam} - ${match.awayTeam}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  match.status != 'scheduled' &&
+                          match.homeScore != null &&
+                          match.awayScore != null
+                      ? '${match.homeScore} - ${match.awayScore}  TERMINÉ'
+                      : match.matchTime,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // ── Bouton envoyer ────────────────────────────────────────────
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: (!mqttConnected || !isOnline)
+                  ? null
+                  : () {
+                      ref
+                          .read(mqttRepositoryProvider)
+                          .sendMatch(match);
+                      ref.read(lastSentMatchProvider.notifier).state = match;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Match envoyé à l\'écran OLED'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+              icon: Icon(
+                isSentThisMatch
+                    ? Icons.check_rounded
+                    : Icons.send_rounded,
+                size: 18,
+              ),
+              label: Text(
+                !mqttConnected
+                    ? 'MQTT non connecté'
+                    : !isOnline
+                        ? 'Objet hors ligne'
+                        : isSentThisMatch
+                            ? 'Affiché sur l\'écran'
+                            : 'Afficher sur MatiMatch Display',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+
+          // ── Événement bouton Wokwi ─────────────────────────────────
+          buttonEvent.when(
+            data: (pressed) => pressed
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Row(
+                      children: [
+                        Icon(Icons.touch_app_rounded,
+                            size: 14, color: cs.primary),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Bouton Wokwi appuyé !',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: cs.primary,
+                              fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  )
+                : const SizedBox.shrink(),
+            loading: () => const SizedBox.shrink(),
+            error: (_, __) => const SizedBox.shrink(),
+          ),
+        ],
+      ),
+    );
   }
 }
 

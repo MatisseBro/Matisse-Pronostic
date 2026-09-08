@@ -93,7 +93,9 @@ class FootballApiService {
     );
 
     try {
-      final response = await http.get(uri, headers: headers);
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 429) {
         final retryAfter = int.tryParse(response.headers['retry-after'] ?? '') ?? 60;
@@ -190,7 +192,9 @@ class FootballApiService {
     );
 
     try {
-      final response = await http.get(uri, headers: headers);
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 429) {
         final retryAfter = int.tryParse(response.headers['retry-after'] ?? '') ?? 60;

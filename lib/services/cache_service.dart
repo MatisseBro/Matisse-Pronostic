@@ -16,8 +16,10 @@ class CacheService {
     _initialized = true;
   }
 
-  // Retourne null si cache absent, expiré, ou Hive non disponible.
-  static Map<String, List<FootballMatch>>? getMatches(DateTime date) {
+  // Retourne null si cache absent ou Hive non disponible.
+  // Retourne les données même expirées si [allowStale] = true.
+  static ({Map<String, List<FootballMatch>> data, DateTime timestamp, bool isStale})?
+      getMatchesEntry(DateTime date, {bool allowStale = false}) {
     if (!_initialized) return null;
 
     final raw = _box.get(_dateKey(date)) as String?;
@@ -25,14 +27,15 @@ class CacheService {
 
     final entry     = jsonDecode(raw) as Map<String, dynamic>;
     final timestamp = DateTime.parse(entry['timestamp'] as String);
+    final isStale   = DateTime.now().difference(timestamp).inMinutes > _ttlMinutes;
 
-    if (DateTime.now().difference(timestamp).inMinutes > _ttlMinutes) {
+    if (isStale && !allowStale) {
       _box.delete(_dateKey(date));
       return null;
     }
 
-    final data = entry['data'] as Map<String, dynamic>;
-    return data.map(
+    final raw2 = entry['data'] as Map<String, dynamic>;
+    final data = raw2.map(
       (league, matches) => MapEntry(
         league,
         (matches as List)
@@ -40,7 +43,12 @@ class CacheService {
             .toList(),
       ),
     );
+    return (data: data, timestamp: timestamp, isStale: isStale);
   }
+
+  // Retourne null si cache absent, expiré, ou Hive non disponible.
+  static Map<String, List<FootballMatch>>? getMatches(DateTime date) =>
+      getMatchesEntry(date)?.data;
 
   // Ne fait rien si Hive n'est pas disponible.
   static Future<void> setMatches(

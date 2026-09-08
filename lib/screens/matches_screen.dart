@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/football_match.dart';
+import '../repositories/football_repository.dart';
 import '../viewmodels/matches_view_model.dart';
+import '../viewmodels/mqtt_provider.dart';
 import '../viewmodels/predictions_view_model.dart';
 import '../services/auth_service.dart';
 import '../services/football_api_service.dart';
@@ -45,6 +47,7 @@ class MatchesScreen extends ConsumerWidget {
           ],
         ),
         actions: [
+          _DeviceStatusBadge(),
           IconButton(
             icon: Icon(Icons.logout_rounded, color: cs.outline),
             tooltip: 'Se déconnecter',
@@ -93,8 +96,8 @@ class MatchesScreen extends ConsumerWidget {
               loading: () =>
                   const Center(child: CircularProgressIndicator()),
               error: (e, _) => _buildError(context, ref, e),
-              data: (grouped) =>
-                  _buildContent(context, ref, grouped, leagueFilter),
+              data: (result) =>
+                  _buildContent(context, ref, result, leagueFilter),
             ),
           ),
         ],
@@ -157,9 +160,10 @@ class MatchesScreen extends ConsumerWidget {
   Widget _buildContent(
     BuildContext context,
     WidgetRef ref,
-    Map<String, List<FootballMatch>> grouped,
+    MatchesResult result,
     String? leagueFilter,
   ) {
+    final grouped = result.data;
     final filtered = leagueFilter == null
         ? grouped
         : (grouped.containsKey(leagueFilter)
@@ -174,34 +178,48 @@ class MatchesScreen extends ConsumerWidget {
         ref.invalidate(matchesProvider);
         await ref.read(matchesProvider.future);
       },
-      child: isEmpty
-          ? ListView(
-              children: [
-                SizedBox(
-                  height: 320,
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.sports_soccer_outlined,
-                            size: 64,
-                            color: Theme.of(context).colorScheme.outlineVariant),
-                        const SizedBox(height: 16),
-                        Text(
-                          leagueFilter == null
-                              ? 'Aucun match ce jour-là'
-                              : 'Aucun match pour $leagueFilter',
-                          style: TextStyle(
-                              color: Theme.of(context).colorScheme.outline,
-                              fontSize: 15),
+      child: Column(
+        children: [
+          if (result.isFromCache && result.cacheTimestamp != null)
+            _CacheBanner(
+              timestamp: result.cacheTimestamp!,
+              onRetry: () => ref.invalidate(matchesProvider),
+            ),
+          Expanded(
+            child: isEmpty
+                ? ListView(
+                    children: [
+                      SizedBox(
+                        height: 320,
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.sports_soccer_outlined,
+                                  size: 64,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .outlineVariant),
+                              const SizedBox(height: 16),
+                              Text(
+                                leagueFilter == null
+                                    ? 'Aucun match ce jour-là'
+                                    : 'Aucun match pour $leagueFilter',
+                                style: TextStyle(
+                                    color:
+                                        Theme.of(context).colorScheme.outline,
+                                    fontSize: 15),
+                              ),
+                            ],
+                          ),
                         ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : _buildList(context, ref, filtered),
+                      ),
+                    ],
+                  )
+                : _buildList(context, ref, filtered),
+          ),
+        ],
+      ),
     );
   }
 
@@ -430,15 +448,26 @@ class _MatchCard extends StatelessWidget {
                     Row(
                       children: [
                         Expanded(
-                          child: Text(
-                            match.homeTeam,
-                            textAlign: TextAlign.end,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w700, fontSize: 13.5),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  match.homeTeam,
+                                  textAlign: TextAlign.end,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13.5),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              _TeamLogo(url: match.homeLogoUrl, size: 28),
+                            ],
                           ),
                         ),
                         Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
                           child: Column(
                             children: [
                               Text(
@@ -456,10 +485,20 @@ class _MatchCard extends StatelessWidget {
                           ),
                         ),
                         Expanded(
-                          child: Text(
-                            match.awayTeam,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w700, fontSize: 13.5),
+                          child: Row(
+                            children: [
+                              _TeamLogo(url: match.awayLogoUrl, size: 28),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  match.awayTeam,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13.5),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -564,6 +603,132 @@ class _StatusBadge extends StatelessWidget {
       child: Text(label,
           style: TextStyle(
               fontSize: 10, color: color, fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+// ── Logo d'équipe ─────────────────────────────────────────────────────────────
+class _TeamLogo extends StatelessWidget {
+  final String? url;
+  final double size;
+  const _TeamLogo({required this.url, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    if (url == null || url!.isEmpty) {
+      return SizedBox(
+        width: size,
+        height: size,
+        child: Icon(Icons.shield_outlined, size: size * 0.8,
+            color: Theme.of(context).colorScheme.outlineVariant),
+      );
+    }
+    return Image.network(
+      url!,
+      width: size,
+      height: size,
+      fit: BoxFit.contain,
+      errorBuilder: (_, __, ___) => SizedBox(
+        width: size,
+        height: size,
+        child: Icon(Icons.shield_outlined, size: size * 0.8,
+            color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+    );
+  }
+}
+
+// ── Badge statut ESP32 dans l'app bar ────────────────────────────────────────
+class _DeviceStatusBadge extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(deviceStatusProvider);
+    final isOnline = status == 'ONLINE';
+    final isUnknown = status == 'unknown';
+
+    if (isUnknown) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: (isOnline ? Colors.green : Colors.red).withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: (isOnline ? Colors.green : Colors.red).withValues(alpha: 0.4),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isOnline ? Icons.sensors_rounded : Icons.sensors_off_rounded,
+                size: 12,
+                color: isOnline ? Colors.green.shade700 : Colors.red.shade700,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                isOnline ? 'Connecté' : 'Hors ligne',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: isOnline ? Colors.green.shade700 : Colors.red.shade700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Bannière données en cache ─────────────────────────────────────────────────
+class _CacheBanner extends StatelessWidget {
+  final DateTime timestamp;
+  final VoidCallback onRetry;
+  const _CacheBanner({required this.timestamp, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final diff = DateTime.now().difference(timestamp);
+    final label = diff.inMinutes < 1
+        ? 'à l\'instant'
+        : diff.inMinutes < 60
+            ? 'il y a ${diff.inMinutes} min'
+            : 'il y a ${diff.inHours} h';
+
+    return Material(
+      color: Colors.amber.shade50,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Row(
+          children: [
+            Icon(Icons.wifi_off_rounded, size: 14, color: Colors.amber.shade800),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Données en cache — dernière mise à jour $label',
+                style: TextStyle(fontSize: 12, color: Colors.amber.shade900),
+              ),
+            ),
+            GestureDetector(
+              onTap: onRetry,
+              child: Text(
+                'Réessayer',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.amber.shade900,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

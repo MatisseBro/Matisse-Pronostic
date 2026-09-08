@@ -1,6 +1,7 @@
 class StandingEntry {
   final int position;
   final String teamName;
+  final String? logoUrl;
   final int points;
   final int played;
   final int won;
@@ -10,6 +11,7 @@ class StandingEntry {
   const StandingEntry({
     required this.position,
     required this.teamName,
+    this.logoUrl,
     required this.points,
     required this.played,
     required this.won,
@@ -22,6 +24,8 @@ class StandingEntry {
     final teamName = team?['name'] as String?
         ?? json['team_name'] as String?
         ?? '?';
+    final logoUrl = team?['logo'] as String?
+        ?? team?['image'] as String?;
 
     final stats = json['stats'] as Map<String, dynamic>?
         ?? json['all'] as Map<String, dynamic>?;
@@ -37,6 +41,7 @@ class StandingEntry {
     return StandingEntry(
       position: json['position'] as int? ?? json['rank'] as int? ?? 0,
       teamName: teamName,
+      logoUrl:  logoUrl,
       points:   json['points'] as int? ?? json['pts'] as int? ?? 0,
       played:   intFor(['played', 'games_played']),
       won:      intFor(['win', 'won', 'wins']),

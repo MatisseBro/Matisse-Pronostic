@@ -3,6 +3,8 @@ class FootballMatch {
   final String leagueName;
   final String homeTeam;
   final String awayTeam;
+  final String? homeLogoUrl;
+  final String? awayLogoUrl;
   final String matchTime;
   final DateTime? kickoffUtc;
   final int? homeScore;
@@ -17,6 +19,8 @@ class FootballMatch {
     required this.leagueName,
     required this.homeTeam,
     required this.awayTeam,
+    this.homeLogoUrl,
+    this.awayLogoUrl,
     required this.matchTime,
     this.kickoffUtc,
     this.homeScore,
@@ -47,6 +51,8 @@ class FootballMatch {
         'leagueName': leagueName,
         'homeTeam': homeTeam,
         'awayTeam': awayTeam,
+        'homeLogoUrl': homeLogoUrl,
+        'awayLogoUrl': awayLogoUrl,
         'matchTime': matchTime,
         'kickoffUtc': kickoffUtc?.toIso8601String(),
         'homeScore': homeScore,
@@ -62,6 +68,8 @@ class FootballMatch {
         leagueName: json['leagueName'] as String,
         homeTeam: json['homeTeam'] as String,
         awayTeam: json['awayTeam'] as String,
+        homeLogoUrl: json['homeLogoUrl'] as String?,
+        awayLogoUrl: json['awayLogoUrl'] as String?,
         matchTime: json['matchTime'] as String,
         kickoffUtc: json['kickoffUtc'] != null
             ? DateTime.parse(json['kickoffUtc'] as String)
@@ -91,11 +99,16 @@ class FootballMatch {
 
     final status = json['status'] as String? ?? 'scheduled';
 
+    final home = teams['home'] as Map<String, dynamic>;
+    final away = teams['away'] as Map<String, dynamic>;
+
     return FootballMatch(
       id: json['id'] as int,
       leagueName: leagueName,
-      homeTeam: teams['home']['name'] as String,
-      awayTeam: teams['away']['name'] as String,
+      homeTeam: home['name'] as String,
+      awayTeam: away['name'] as String,
+      homeLogoUrl: home['logo'] as String? ?? home['image'] as String?,
+      awayLogoUrl: away['logo'] as String? ?? away['image'] as String?,
       matchTime: time,
       kickoffUtc: kickoffUtc,
       homeScore: status == 'scheduled' ? null : goals?['home'] as int?,

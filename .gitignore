@@ -46,3 +46,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# PlatformIO (ESP32 firmware)
+esp32/.pio/
+esp32/.vscode/
+esp32/include/credentials.h

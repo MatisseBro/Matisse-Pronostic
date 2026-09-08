@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../services/football_api_service.dart';
 import '../viewmodels/standings_view_model.dart';
 import '../models/standing_entry.dart';
@@ -348,25 +349,33 @@ class _TeamLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (url == null || url!.isEmpty) {
-      return SizedBox(
-        width: size,
-        height: size,
-        child: Icon(Icons.shield_outlined, size: size * 0.8,
-            color: Theme.of(context).colorScheme.outlineVariant),
-      );
-    }
-    return Image.network(
-      url!,
+    final fallback = SizedBox(
+      width: size,
+      height: size,
+      child: Icon(Icons.shield_outlined, size: size * 0.8,
+          color: Theme.of(context).colorScheme.outlineVariant),
+    );
+
+    if (url == null || url!.isEmpty) return fallback;
+
+    return CachedNetworkImage(
+      imageUrl: url!,
       width: size,
       height: size,
       fit: BoxFit.contain,
-      errorBuilder: (_, __, ___) => SizedBox(
+      placeholder: (_, __) => SizedBox(
         width: size,
         height: size,
-        child: Icon(Icons.shield_outlined, size: size * 0.8,
-            color: Theme.of(context).colorScheme.outlineVariant),
+        child: Center(
+          child: SizedBox(
+            width: size * 0.5,
+            height: size * 0.5,
+            child: CircularProgressIndicator(strokeWidth: 1.5,
+                color: Theme.of(context).colorScheme.outlineVariant),
+          ),
+        ),
       ),
+      errorWidget: (_, __, ___) => fallback,
     );
   }
 }

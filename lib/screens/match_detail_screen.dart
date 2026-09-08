@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/football_match.dart';
 import '../models/prediction.dart';
 import '../viewmodels/mqtt_provider.dart';
@@ -110,7 +111,7 @@ class MatchDetailScreen extends ConsumerWidget {
 
     return Row(
       children: [
-        Expanded(child: _TeamBlock(name: match.homeTeam, cs: cs)),
+        Expanded(child: _TeamBlock(name: match.homeTeam, logoUrl: match.homeLogoUrl, cs: cs)),
         Column(
           children: [
             Text(
@@ -133,7 +134,7 @@ class MatchDetailScreen extends ConsumerWidget {
             ],
           ],
         ),
-        Expanded(child: _TeamBlock(name: match.awayTeam, cs: cs, isAway: true)),
+        Expanded(child: _TeamBlock(name: match.awayTeam, logoUrl: match.awayLogoUrl, cs: cs, isAway: true)),
       ],
     );
   }
@@ -338,33 +339,34 @@ class _PredictionSummary extends StatelessWidget {
 // ── Bloc équipe ───────────────────────────────────────────────────────────────
 class _TeamBlock extends StatelessWidget {
   final String name;
+  final String? logoUrl;
   final ColorScheme cs;
   final bool isAway;
-  const _TeamBlock({required this.name, required this.cs, this.isAway = false});
+  const _TeamBlock({required this.name, this.logoUrl, required this.cs, this.isAway = false});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
+    Widget logo;
+    if (logoUrl != null && logoUrl!.isNotEmpty) {
+      logo = CachedNetworkImage(
+        imageUrl: logoUrl!,
+        width: 64,
+        height: 64,
+        fit: BoxFit.contain,
+        placeholder: (_, __) => const SizedBox(
           width: 64,
           height: 64,
-          decoration: BoxDecoration(
-            color: cs.primaryContainer,
-            shape: BoxShape.circle,
-            border: Border.all(color: cs.outlineVariant, width: 1.5),
-          ),
-          child: Center(
-            child: Text(
-              name[0].toUpperCase(),
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.w800,
-                color: cs.onPrimaryContainer,
-              ),
-            ),
-          ),
+          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
         ),
+        errorWidget: (_, __, ___) => _fallbackCircle(),
+      );
+    } else {
+      logo = _fallbackCircle();
+    }
+
+    return Column(
+      children: [
+        logo,
         const SizedBox(height: 10),
         SizedBox(
           width: 90,
@@ -377,6 +379,28 @@ class _TeamBlock extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _fallbackCircle() {
+    return Container(
+      width: 64,
+      height: 64,
+      decoration: BoxDecoration(
+        color: cs.primaryContainer,
+        shape: BoxShape.circle,
+        border: Border.all(color: cs.outlineVariant, width: 1.5),
+      ),
+      child: Center(
+        child: Text(
+          name[0].toUpperCase(),
+          style: TextStyle(
+            fontSize: 26,
+            fontWeight: FontWeight.w800,
+            color: cs.onPrimaryContainer,
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,0 +1,132 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Fonction helper : identifie l'administrateur ──────────────────────────
+    //
+    // Obtenir ton UID :
+    //   Firebase Console → Authentication → onglet Users → colonne "User UID"
+    //
+    // ⚠️  Remplacer "REMPLACER_PAR_TON_UID_ADMIN" par la valeur copiée.
+    //     Ne jamais mettre cette valeur dans le code Flutter.
+    //
+    function isAdmin() {
+      return request.auth != null
+          && request.auth.uid == "REMPLACER_PAR_TON_UID_ADMIN";
+    }
+
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Collection : predictions
+    // Règles : chaque utilisateur possède ses propres pronostics.
+    //          L'admin conserve un accès étendu pour gérer les résultats
+    //          et les documents legacy (authorUid == null).
+    // ═════════════════════════════════════════════════════════════════════════
+    match /predictions/{predId} {
+
+      // Lecture : tout utilisateur authentifié
+      allow read: if request.auth != null;
+
+      // Création : le document DOIT s'attribuer à l'utilisateur connecté.
+      // Empêche d'écrire authorUid = null ou authorUid = uid_d_un_autre.
+      allow create: if request.auth != null
+          && request.resource.data.authorUid == request.auth.uid;
+
+      // Mise à jour — trois conditions cumulatives :
+      //   (1) authorUid ne change jamais (immutabilité du propriétaire)
+      //   (2) au moins une des règles d'accès ci-dessous est satisfaite :
+      //       (a) propriétaire : peut modifier tous ses champs
+      //       (b) admin : peut modifier UNIQUEMENT le champ 'result'
+      //           sur le prono de n'importe quel utilisateur
+      //       (c) admin : peut tout modifier sur les pronos legacy
+      //           (authorUid == null, créés avant la migration)
+      allow update: if request.auth != null
+          // (1) authorUid immutable
+          && request.resource.data.authorUid == resource.data.authorUid
+          && (
+            // (2a) propriétaire
+            resource.data.authorUid == request.auth.uid
+            // (2b) admin → uniquement le champ result
+            || (isAdmin()
+                && request.resource.data.diff(resource.data)
+                                        .affectedKeys()
+                                        .hasOnly(['result']))
+            // (2c) admin → prono legacy sans propriétaire
+            || (isAdmin() && resource.data.authorUid == null)
+          );
+
+      // Suppression :
+      //   - propriétaire supprime le sien
+      //   - admin supprime les legacy (authorUid == null)
+      //   → l'admin NE PEUT PAS supprimer le prono d'un autre utilisateur
+      allow delete: if request.auth != null
+          && (
+            resource.data.authorUid == request.auth.uid
+            || (isAdmin() && resource.data.authorUid == null)
+          );
+    }
+
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Collection : users
+    // Profils + sous-collections friends et received
+    // ═════════════════════════════════════════════════════════════════════════
+    match /users/{uid} {
+
+      // Lecture du profil : tout utilisateur authentifié peut chercher
+      // un profil par email (findByEmail utilise une query sur la collection).
+      allow read: if request.auth != null;
+
+      // Écriture sur le document profil lui-même : uniquement le propriétaire.
+      // Couvre : ensureProfile, updateDisplayName, updateDeviceId.
+      allow write: if request.auth.uid == uid;
+
+
+      // ── Sous-collection friends ───────────────────────────────────────────
+      // Lecture et écriture : uniquement le propriétaire de la liste.
+      // Le service Flutter (SocialService.addFriend) effectue un batch write
+      // qui écrit des deux côtés, mais chaque écriture est exécutée sous
+      // l'identité de l'utilisateur connecté qui, par construction, est l'un
+      // des deux participants.
+      // Note : l'amitié bidirectionnelle est assurée côté Flutter ; les règles
+      // garantissent que personne d'autre ne peut modifier tes amis.
+      match /friends/{friendUid} {
+        allow read, write: if request.auth.uid == uid;
+      }
+
+
+      // ── Sous-collection received ──────────────────────────────────────────
+      // Reçus = pronostics partagés par un ami.
+      match /received/{predId} {
+
+        // Lecture : uniquement le destinataire (le propriétaire de la boîte).
+        allow read: if request.auth.uid == uid;
+
+        // Création d'un document reçu.
+        // Trois conditions :
+        //   (1) l'expéditeur est authentifié
+        //   (2) le champ fromUid correspond à son identité réelle
+        //       (empêche l'usurpation : Alice ne peut pas envoyer au nom de Bob)
+        //   (3) l'expéditeur est bien un ami du destinataire
+        //       (empêche le spam : seuls les amis peuvent partager)
+        allow create: if request.auth != null
+            && request.resource.data.fromUid == request.auth.uid
+            && exists(/databases/$(database)/documents
+                      /users/$(uid)/friends/$(request.auth.uid));
+
+        // Mise à jour (seul usage : mqttStatus "pending" → "sent").
+        // Mêmes conditions que la création :
+        //   - l'expéditeur original doit être l'auteur du document
+        //   - l'amitié doit toujours exister
+        allow update: if request.auth != null
+            && resource.data.fromUid == request.auth.uid
+            && exists(/databases/$(database)/documents
+                      /users/$(uid)/friends/$(request.auth.uid));
+
+        // Suppression interdite depuis le client.
+        // (À implémenter via Cloud Function si besoin ultérieurement.)
+      }
+    }
+
+  }
+}

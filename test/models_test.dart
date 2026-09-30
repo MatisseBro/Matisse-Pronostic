@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_application_1/models/prediction.dart';
+import 'package:flutter_application_1/models/shared_prediction.dart';
 import 'package:flutter_application_1/models/standing_entry.dart';
 
 void main() {
@@ -157,6 +158,114 @@ void main() {
       final resolved = won + lost;
       expect(won / resolved * 100, 100.0);
       expect(predictions.length - resolved, 2); // 2 en attente
+    });
+  });
+
+  // ── authorUid — ownership ─────────────────────────────────────────────────
+  group('Prediction.authorUid', () {
+    final predWithAuthor = Prediction(
+      id: '42',
+      matchLabel: 'Lyon - Rennes',
+      selection: '2',
+      odds: 3.20,
+      comment: '',
+      confidence: 2,
+      createdAt: DateTime(2026, 9, 30),
+      authorUid: 'uid-alice',
+    );
+
+    test('authorUid est inclus dans toJson', () {
+      final json = predWithAuthor.toJson();
+      expect(json['authorUid'], 'uid-alice');
+    });
+
+    test('authorUid est préservé dans fromJson', () {
+      final restored = Prediction.fromJson(predWithAuthor.toJson());
+      expect(restored.authorUid, 'uid-alice');
+    });
+
+    test('authorUid null est stocké (pronostic legacy)', () {
+      final legacy = Prediction(
+        id: '1',
+        matchLabel: 'Nantes - Metz',
+        selection: '1',
+        odds: 1.80,
+        comment: '',
+        confidence: 3,
+        createdAt: DateTime(2026, 1, 1),
+      );
+      final json = legacy.toJson();
+      expect(json.containsKey('authorUid'), isTrue);
+      expect(json['authorUid'], isNull);
+    });
+
+    test('fromJson accepte authorUid null (legacy)', () {
+      final json = predWithAuthor.toJson();
+      json['authorUid'] = null;
+      final restored = Prediction.fromJson(json);
+      expect(restored.authorUid, isNull);
+    });
+
+    test('copyWith ne peut pas modifier authorUid (non exposé)', () {
+      // copyWith n'expose pas authorUid — l'uid reste celui d'origine
+      final copied = predWithAuthor.copyWith(result: 'won');
+      expect(copied.authorUid, 'uid-alice');
+    });
+  });
+
+  // ── SharedPrediction ──────────────────────────────────────────────────────
+  group('SharedPrediction', () {
+    final shared = SharedPrediction(
+      id: 'pred-1',
+      fromUid: 'uid-alice',
+      fromName: 'Alice',
+      matchLabel: 'PSG - Monaco',
+      selection: '1',
+      odds: 1.65,
+      confidence: 4,
+      comment: 'PSG à domicile',
+      createdAt: DateTime(2026, 9, 30),
+      mqttStatus: 'pending',
+    );
+
+    test('toJson / fromJson round-trip complet', () {
+      final json = shared.toJson();
+      final restored = SharedPrediction.fromJson(json);
+
+      expect(restored.id,         shared.id);
+      expect(restored.fromUid,    shared.fromUid);
+      expect(restored.fromName,   shared.fromName);
+      expect(restored.matchLabel, shared.matchLabel);
+      expect(restored.selection,  shared.selection);
+      expect(restored.odds,       shared.odds);
+      expect(restored.confidence, shared.confidence);
+      expect(restored.comment,    shared.comment);
+      expect(restored.mqttStatus, shared.mqttStatus);
+    });
+
+    test('fromUid est inclus dans toJson', () {
+      expect(shared.toJson()['fromUid'], 'uid-alice');
+    });
+
+    test('mqttStatus par défaut est pending', () {
+      final noStatus = SharedPrediction(
+        id: 'x', fromUid: 'u', fromName: 'U',
+        matchLabel: 'A - B', selection: '1', odds: 1.5,
+        confidence: 3, comment: '', createdAt: DateTime.now(),
+      );
+      expect(noStatus.mqttStatus, 'pending');
+    });
+
+    test('fromJson avec fromUid absent utilise chaîne vide', () {
+      final json = shared.toJson()..remove('fromUid');
+      final restored = SharedPrediction.fromJson(json);
+      expect(restored.fromUid, '');
+    });
+
+    test('fromJson avec fromName absent utilise Inconnu', () {
+      final json = shared.toJson()..remove('fromName');
+      final restored = SharedPrediction.fromJson(json);
+      expect(restored.fromName, 'Inconnu');
     });
   });
 }

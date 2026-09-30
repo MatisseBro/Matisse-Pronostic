@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/prediction.dart';
+import '../viewmodels/auth_view_model.dart';
 import '../viewmodels/predictions_view_model.dart';
 import 'add_prediction_screen.dart';
 import 'prediction_detail_screen.dart';
@@ -11,6 +12,7 @@ class PredictionsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncPredictions = ref.watch(predictionsProvider);
+    final isAdmin = ref.watch(isAdminProvider);
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -18,7 +20,7 @@ class PredictionsScreen extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: cs.surfaceContainerLowest,
         title: Text(
-          'Mes pronostics',
+          'Pronostics',
           style: TextStyle(
             fontWeight: FontWeight.w800,
             fontSize: 20,
@@ -27,15 +29,17 @@ class PredictionsScreen extends ConsumerWidget {
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-                builder: (_) => const AddPredictionScreen())),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Nouveau',
-            style: TextStyle(fontWeight: FontWeight.w600)),
-      ),
+      floatingActionButton: isAdmin
+          ? FloatingActionButton.extended(
+              onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const AddPredictionScreen())),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Nouveau',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+            )
+          : null,
       body: asyncPredictions.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Erreur : $e')),
@@ -120,6 +124,7 @@ class _PredictionCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final cs = Theme.of(context).colorScheme;
+    final isAdmin = ref.watch(isAdminProvider);
     final color = _selectionColor(prediction.selection);
     final result = prediction.result;
 
@@ -181,12 +186,14 @@ class _PredictionCard extends ConsumerWidget {
                             ),
                             if (result != null)
                               _ResultBadge(result: result),
-                            const SizedBox(width: 4),
-                            GestureDetector(
-                              onTap: () => _confirmDelete(context, ref),
-                              child: Icon(Icons.delete_outline_rounded,
-                                  color: cs.error, size: 20),
-                            ),
+                            if (isAdmin) ...[
+                              const SizedBox(width: 4),
+                              GestureDetector(
+                                onTap: () => _confirmDelete(context, ref),
+                                child: Icon(Icons.delete_outline_rounded,
+                                    color: cs.error, size: 20),
+                              ),
+                            ],
                           ],
                         ),
                         const SizedBox(height: 10),
@@ -258,14 +265,16 @@ class _PredictionCard extends ConsumerWidget {
                                   color: cs.outline)),
                         ],
 
-                        const SizedBox(height: 12),
-                        // ── Boutons résultat ─────────────────────────
-                        _ResultButtons(
-                          currentResult: result,
-                          onSelect: (r) => ref
-                              .read(predictionsProvider.notifier)
-                              .setResult(prediction.id, r),
-                        ),
+                        // ── Boutons résultat (admin uniquement) ──────
+                        if (isAdmin) ...[
+                          const SizedBox(height: 12),
+                          _ResultButtons(
+                            currentResult: result,
+                            onSelect: (r) => ref
+                                .read(predictionsProvider.notifier)
+                                .setResult(prediction.id, r),
+                          ),
+                        ],
                       ],
                     ),
                   ),

@@ -102,6 +102,9 @@ class FootballMatch {
     final home = teams['home'] as Map<String, dynamic>;
     final away = teams['away'] as Map<String, dynamic>;
 
+    // ignore: avoid_print
+    print('[LOGO DEBUG] home keys: ${home.keys.toList()} | logo=${home['logo']}');
+
     return FootballMatch(
       id: json['id'] as int,
       leagueName: leagueName,

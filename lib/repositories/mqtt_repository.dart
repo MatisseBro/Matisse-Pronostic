@@ -2,15 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:mqtt_client/mqtt_client.dart';
 import '../models/football_match.dart';
+import '../models/prediction.dart';
 import '../services/mqtt_service.dart';
 
 class MqttRepository {
   final MqttService _service;
   MqttRepository(this._service);
 
-  static const topicMatch  = 'matimatch/device/match';
-  static const topicStatus = 'matimatch/device/status';
-  static const topicButton = 'matimatch/device/button';
+  static const topicMatch       = 'matimatch/device/match';
+  static const topicPrediction  = 'matimatch/device/prediction';
+  static const topicStatus      = 'matimatch/device/status';
+  static const topicButton      = 'matimatch/device/button';
 
   Stream<MqttState> get stateStream => _service.stateStream;
   bool get isConnected => _service.isConnected;
@@ -35,6 +37,18 @@ class MqttRepository {
       'kickoff':   match.matchTime,
     });
     _service.publish(topicMatch, payload);
+  }
+
+  // Flutter → ESP32 : envoyer un pronostic à afficher sur l'OLED
+  void sendPrediction(Prediction prediction) {
+    final payload = jsonEncode({
+      'matchLabel': prediction.matchLabel,
+      'selection':  prediction.selection,
+      'odds':       prediction.odds,
+      'confidence': prediction.confidence,
+      'comment':    prediction.comment,
+    });
+    _service.publish(topicPrediction, payload);
   }
 
   // ESP32 → Flutter : statut ONLINE / OFFLINE (topic retain)

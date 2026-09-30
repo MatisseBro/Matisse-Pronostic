@@ -1,0 +1,29 @@
+{
+    "folders": [
+        {
+            "name": "Matimatch — Flutter + ESP32",
+            "path": "."
+        }
+    ],
+    "settings": {
+        "dart.flutterSdkPath": "C:\\Cours\\Master\\Mobile\\Appli\\flutter_sdk",
+        "files.exclude": {
+            "**/.dart_tool": true,
+            "**/.idea": true,
+            "**/build": true,
+            "**/.pio": true
+        }
+    },
+    "extensions": {
+        "recommendations": [
+            "dart-code.flutter",
+            "dart-code.dart-code",
+            "platformio.platformio-ide",
+            "wokwi.wokwi-vscode"
+        ],
+        "unwantedRecommendations": [
+            "ms-vscode.cpptools-extension-pack",
+            "pioarduino.pioarduino-ide"
+        ]
+    }
+}

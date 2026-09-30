@@ -1,10 +1,13 @@
-import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/prediction.dart';
+import '../services/firestore_service.dart';
+import '../services/auth_service.dart';
 import '../services/football_api_service.dart';
-import '../storage/preferences_service.dart';
+import 'mqtt_provider.dart';
 
-final predictionsProvider = AsyncNotifierProvider<PredictionsNotifier, List<Prediction>>(
+final predictionsProvider =
+    AsyncNotifierProvider<PredictionsNotifier, List<Prediction>>(
   PredictionsNotifier.new,
 );
 
@@ -19,40 +22,74 @@ final predictedMatchLabelsProvider = Provider<Set<String>>((ref) {
 class PredictionsNotifier extends AsyncNotifier<List<Prediction>> {
   @override
   Future<List<Prediction>> build() async {
-    final list = await PreferencesService.getPredictions();
-    return list
-        .map((s) => Prediction.fromJson(jsonDecode(s) as Map<String, dynamic>))
-        .toList();
+    // Écoute temps réel Firestore
+    final sub = FirestoreService.predictionsStream().listen(
+      (preds) {
+        debugPrint('[FIRESTORE] Stream : ${preds.length} pronostic(s) reçu(s)');
+        state = AsyncData(preds);
+      },
+      onError: (e, st) {
+        debugPrint('[FIRESTORE ERROR] Stream : $e');
+        debugPrint('[FIRESTORE ERROR] $st');
+        state = AsyncError(e, st);
+      },
+    );
+    ref.onDispose(sub.cancel);
+
+    // Chargement initial
+    try {
+      final list = await FirestoreService.getPredictions();
+      debugPrint('[FIRESTORE] Chargement initial : ${list.length} pronostic(s)');
+      return list;
+    } catch (e, st) {
+      debugPrint('[FIRESTORE ERROR] Chargement initial : $e');
+      debugPrint('[FIRESTORE ERROR] $st');
+      // On laisse la liste vide mais on ne masque pas l'erreur dans les logs
+      return [];
+    }
   }
 
   Future<void> add(Prediction prediction) async {
-    final current = await future;
-    final updated = [...current, prediction];
-    await _persist(updated);
-    state = AsyncData(updated);
+    final user = AuthService.currentUser;
+    debugPrint('[FIREBASE] Utilisateur connecté : ${user?.uid} (${user?.email})');
+
+    final withAuthor = Prediction(
+      id: prediction.id,
+      matchLabel: prediction.matchLabel,
+      selection: prediction.selection,
+      odds: prediction.odds,
+      stake: prediction.stake,
+      comment: prediction.comment,
+      confidence: prediction.confidence,
+      createdAt: prediction.createdAt,
+      result: prediction.result,
+      fixtureId: prediction.fixtureId,
+      kickoffUtc: prediction.kickoffUtc,
+      authorUid: user?.uid,
+    );
+
+    // 1. Enregistrement Firestore — toute erreur remonte sans être masquée
+    await FirestoreService.savePrediction(withAuthor);
+
+    // 2. Publication MQTT directe vers l'ESP32
+    final mqttRepo = ref.read(mqttRepositoryProvider);
+    if (mqttRepo.isConnected) {
+      mqttRepo.sendPrediction(withAuthor);
+    }
+    // (state mis à jour automatiquement par le stream Firestore)
   }
 
   Future<void> remove(String id) async {
-    final current = await future;
-    final updated = current.where((p) => p.id != id).toList();
-    await _persist(updated);
-    state = AsyncData(updated);
+    await FirestoreService.deletePrediction(id);
   }
 
   Future<void> setResult(String id, String? result) async {
-    final current = await future;
-    final updated = current.map((p) {
-      if (p.id != id) return p;
-      return result == null ? p.copyWith(clearResult: true) : p.copyWith(result: result);
-    }).toList();
-    await _persist(updated);
-    state = AsyncData(updated);
+    await FirestoreService.updateResult(id, result);
   }
 
-  // Vérifie automatiquement les résultats des pronostics en attente via l'API.
-  // Retourne le nombre de résultats mis à jour.
+  // Vérifie automatiquement les résultats via l'API Football.
   Future<int> autoCheckResults() async {
-    final current = await future;
+    final current = state.valueOrNull ?? [];
     final now = DateTime.now().toUtc();
     final toCheck = current
         .where((p) =>
@@ -64,38 +101,25 @@ class PredictionsNotifier extends AsyncNotifier<List<Prediction>> {
 
     if (toCheck.isEmpty) return 0;
 
-    var updated = List<Prediction>.from(current);
     int count = 0;
-
     for (int i = 0; i < toCheck.length; i++) {
       if (i > 0) await Future.delayed(const Duration(milliseconds: 400));
       final pred = toCheck[i];
-      final matchResult = await FootballApiService.fetchFixtureResult(pred.fixtureId!);
+      final matchResult =
+          await FootballApiService.fetchFixtureResult(pred.fixtureId!);
       if (matchResult != null) {
         final outcome = matchResult == pred.selection ? 'won' : 'lost';
-        final idx = updated.indexWhere((p) => p.id == pred.id);
-        if (idx != -1) {
-          updated[idx] = updated[idx].copyWith(result: outcome);
-          count++;
-        }
+        await FirestoreService.updateResult(pred.id, outcome);
+        count++;
       }
-    }
-
-    if (count > 0) {
-      await _persist(updated);
-      state = AsyncData(updated);
     }
     return count;
   }
 
   Future<void> clear() async {
-    await _persist([]);
-    state = const AsyncData([]);
-  }
-
-  Future<void> _persist(List<Prediction> list) async {
-    await PreferencesService.setPredictions(
-      list.map((p) => jsonEncode(p.toJson())).toList(),
-    );
+    final current = state.valueOrNull ?? [];
+    for (final p in current) {
+      await FirestoreService.deletePrediction(p.id);
+    }
   }
 }

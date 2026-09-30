@@ -39,6 +39,9 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   String _friendlyError(String raw) {
+    if (raw.contains('TimeoutException') || raw.contains('trop de temps') || raw.contains('> 15')) {
+      return 'Connexion trop lente (> 15 s). Vérifie ta connexion internet.';
+    }
     if (raw.contains('user-not-found') || raw.contains('wrong-password') ||
         raw.contains('invalid-credential')) {
       return 'Email ou mot de passe incorrect.';
@@ -46,7 +49,11 @@ class _LoginScreenState extends State<LoginScreen> {
     if (raw.contains('too-many-requests')) {
       return 'Trop de tentatives. Réessaie plus tard.';
     }
-    return 'Erreur de connexion. Vérifie ta connexion internet.';
+    if (raw.contains('network-request-failed') || raw.contains('network')) {
+      return 'Pas de connexion internet.';
+    }
+    // Affiche l'erreur brute pour tout cas non anticipé
+    return 'Erreur : ${raw.replaceAll('Exception: ', '').replaceAll('FirebaseAuthException: ', '')}';
   }
 
   @override

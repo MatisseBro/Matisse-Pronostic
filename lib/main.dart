@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -52,6 +53,13 @@ Future<void> main() async {
     ));
     return;
   }
+
+  // Tentative de désactivation de la persistance locale (best-effort).
+  // Le mécanisme principal de confirmation est runTransaction() dans FirestoreService.
+  try {
+    FirebaseFirestore.instance.settings =
+        const Settings(persistenceEnabled: false);
+  } catch (_) {}
 
   try {
     await CacheService.init();
@@ -167,14 +175,12 @@ class _HomePageState extends ConsumerState<HomePage> {
   Future<void> _initMqtt() async {
     final repo = ref.read(mqttRepositoryProvider);
 
-    // Écouter l'état de connexion MQTT
     repo.stateStream.listen((s) {
       if (!mounted) return;
       ref.read(mqttConnectedProvider.notifier).state =
           s == MqttState.connected;
     });
 
-    // Écouter le statut de l'objet (ONLINE / OFFLINE)
     repo.deviceStatusStream.listen((status) {
       if (!mounted) return;
       ref.read(deviceStatusProvider.notifier).state = status.trim();

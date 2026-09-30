@@ -10,6 +10,7 @@ class Prediction {
   final String? result; // null = en attente, 'won', 'lost'
   final int? fixtureId; // ID du match API pour auto-vérification
   final DateTime? kickoffUtc; // coup d'envoi UTC pour blocage à -5 min
+  final String? authorUid;
 
   const Prediction({
     required this.id,
@@ -23,6 +24,7 @@ class Prediction {
     this.result,
     this.fixtureId,
     this.kickoffUtc,
+    this.authorUid,
   });
 
   double? get potentialGain => stake == null ? null : stake! * odds;
@@ -56,6 +58,7 @@ class Prediction {
         result: clearResult ? null : (result ?? this.result),
         fixtureId: fixtureId ?? this.fixtureId,
         kickoffUtc: kickoffUtc ?? this.kickoffUtc,
+        authorUid: authorUid,
       );
 
   Map<String, dynamic> toJson() => {
@@ -66,10 +69,11 @@ class Prediction {
         'stake': stake,
         'comment': comment,
         'confidence': confidence,
-        'createdAt': createdAt.toIso8601String(),
+        'createdAt': createdAt.toUtc().toIso8601String(),
         'result': result,
         'fixtureId': fixtureId,
-        'kickoffUtc': kickoffUtc?.toIso8601String(),
+        'kickoffUtc': kickoffUtc?.toUtc().toIso8601String(),
+        'authorUid': authorUid,
       };
 
   factory Prediction.fromJson(Map<String, dynamic> json) => Prediction(
@@ -80,11 +84,12 @@ class Prediction {
         stake: (json['stake'] as num?)?.toDouble(),
         comment: json['comment'] as String,
         confidence: json['confidence'] as int,
-        createdAt: DateTime.parse(json['createdAt'] as String),
+        createdAt: DateTime.parse(json['createdAt'] as String).toLocal(),
         result: json['result'] as String?,
         fixtureId: json['fixtureId'] as int?,
         kickoffUtc: json['kickoffUtc'] != null
-            ? DateTime.parse(json['kickoffUtc'] as String)
+            ? DateTime.parse(json['kickoffUtc'] as String).toLocal()
             : null,
+        authorUid: json['authorUid'] as String?,
       );
 }

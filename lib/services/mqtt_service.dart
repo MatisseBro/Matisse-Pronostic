@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
@@ -43,8 +44,10 @@ class MqttService {
 
     try {
       await _client!.connect();
+      debugPrint('[MQTT] connect() terminé — état: $_state');
       return isConnected;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[MQTT] Erreur de connexion: $e');
       _emitState(MqttState.disconnected);
       return false;
     }

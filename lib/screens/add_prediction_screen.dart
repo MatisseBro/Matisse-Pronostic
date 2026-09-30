@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/prediction.dart';
+import '../services/firestore_service.dart';
 import '../viewmodels/matches_view_model.dart';
 import '../viewmodels/predictions_view_model.dart';
 
@@ -108,15 +109,42 @@ class _AddPredictionScreenState extends ConsumerState<AddPredictionScreen> {
       kickoffUtc:  widget.kickoffUtc,
     );
 
-    await ref.read(predictionsProvider.notifier).add(prediction);
+    try {
+      await ref.read(predictionsProvider.notifier).add(prediction);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur Firestore : $e'),
+            backgroundColor: const Color(0xFFDC2626),
+            duration: const Duration(seconds: 10),
+          ),
+        );
+      }
+      return;
+    }
 
     if (mounted) {
-      ref.read(selectedTabProvider.notifier).state = 0;
-      Navigator.of(context).popUntil((route) => route.isFirst);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Pronostic enregistré ✓'),
-          duration: Duration(seconds: 2),
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('✓ Firestore OK'),
+          content: SelectableText(
+            'Document confirmé côté serveur (REST).\n\n'
+            'ID : ${prediction.id}\n'
+            'Projet : ${FirestoreService.projectId}',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                ref.read(selectedTabProvider.notifier).state = 0;
+                Navigator.of(context).popUntil((route) => route.isFirst);
+              },
+              child: const Text('OK'),
+            ),
+          ],
         ),
       );
     }

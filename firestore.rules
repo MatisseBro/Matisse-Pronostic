@@ -2,129 +2,201 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── Fonction helper : identifie l'administrateur ──────────────────────────
-    //
-    // Obtenir ton UID :
-    //   Firebase Console → Authentication → onglet Users → colonne "User UID"
-    //
-    // ⚠️  Remplacer "REMPLACER_PAR_TON_UID_ADMIN" par la valeur copiée.
-    //     Ne jamais mettre cette valeur dans le code Flutter.
-    //
+    // ── Administrateur ────────────────────────────────────────────────────────
+    // UID visible dans Firebase Console → Authentication → Users → colonne UID.
+    // Ne pas reproduire cette valeur dans le code Flutter.
     function isAdmin() {
       return request.auth != null
-          && request.auth.uid == "REMPLACER_PAR_TON_UID_ADMIN";
+          && request.auth.uid == "uFiFjKTYUzSDlPITAC7gx9ElPcC3";
+    }
+
+    // Lecture robuste d'un champ potentiellement absent (ex. authorUid legacy).
+    function field(data, key) {
+      return data.get(key, null);
     }
 
 
     // ═════════════════════════════════════════════════════════════════════════
     // Collection : predictions
-    // Règles : chaque utilisateur possède ses propres pronostics.
-    //          L'admin conserve un accès étendu pour gérer les résultats
-    //          et les documents legacy (authorUid == null).
+    // Chaque utilisateur possède ses propres pronostics.
+    // L'admin conserve un accès étendu pour : résultats + documents legacy.
     // ═════════════════════════════════════════════════════════════════════════
     match /predictions/{predId} {
 
-      // Lecture : tout utilisateur authentifié
+      // Lecture : tout utilisateur authentifié peut lire tous les pronostics.
       allow read: if request.auth != null;
 
-      // Création : le document DOIT s'attribuer à l'utilisateur connecté.
-      // Empêche d'écrire authorUid = null ou authorUid = uid_d_un_autre.
+      // Création : authorUid doit correspondre à l'utilisateur connecté.
+      // Interdit d'écrire authorUid = null ou authorUid = uid_d_un_autre.
       allow create: if request.auth != null
           && request.resource.data.authorUid == request.auth.uid;
 
-      // Mise à jour — trois conditions cumulatives :
-      //   (1) authorUid ne change jamais (immutabilité du propriétaire)
-      //   (2) au moins une des règles d'accès ci-dessous est satisfaite :
-      //       (a) propriétaire : peut modifier tous ses champs
-      //       (b) admin : peut modifier UNIQUEMENT le champ 'result'
-      //           sur le prono de n'importe quel utilisateur
-      //       (c) admin : peut tout modifier sur les pronos legacy
-      //           (authorUid == null, créés avant la migration)
+      // Mise à jour :
+      //   Règle (1) — authorUid IMMUABLE : la valeur ne peut jamais changer.
+      //               Utilise field() pour gérer l'absence totale du champ (legacy).
+      //   Règle (2) — au moins une condition d'accès doit être vraie :
+      //     (a) Propriétaire — peut modifier tous ses champs (sauf authorUid).
+      //     (b) Admin — peut modifier UNIQUEMENT 'result' sur n'importe quel prono.
+      //     (c) Admin — peut tout modifier sur les pronos legacy (authorUid absent/null).
       allow update: if request.auth != null
           // (1) authorUid immutable
-          && request.resource.data.authorUid == resource.data.authorUid
+          && field(request.resource.data, 'authorUid') == field(resource.data, 'authorUid')
           && (
             // (2a) propriétaire
-            resource.data.authorUid == request.auth.uid
-            // (2b) admin → uniquement le champ result
+            field(resource.data, 'authorUid') == request.auth.uid
+            // (2b) admin → uniquement le champ 'result'
             || (isAdmin()
                 && request.resource.data.diff(resource.data)
                                         .affectedKeys()
                                         .hasOnly(['result']))
-            // (2c) admin → prono legacy sans propriétaire
-            || (isAdmin() && resource.data.authorUid == null)
+            // (2c) admin → prono legacy (authorUid absent ou null)
+            || (isAdmin() && field(resource.data, 'authorUid') == null)
           );
 
       // Suppression :
-      //   - propriétaire supprime le sien
-      //   - admin supprime les legacy (authorUid == null)
-      //   → l'admin NE PEUT PAS supprimer le prono d'un autre utilisateur
+      //   - Propriétaire supprime le sien.
+      //   - Admin supprime les pronos legacy (authorUid absent/null).
+      //   - L'admin NE PEUT PAS supprimer le prono d'un autre utilisateur.
       allow delete: if request.auth != null
           && (
-            resource.data.authorUid == request.auth.uid
-            || (isAdmin() && resource.data.authorUid == null)
+            field(resource.data, 'authorUid') == request.auth.uid
+            || (isAdmin() && field(resource.data, 'authorUid') == null)
           );
     }
 
 
     // ═════════════════════════════════════════════════════════════════════════
     // Collection : users
-    // Profils + sous-collections friends et received
+    // Profils + sous-collections friends, friendRequests, received.
     // ═════════════════════════════════════════════════════════════════════════
     match /users/{uid} {
 
-      // Lecture du profil : tout utilisateur authentifié peut chercher
-      // un profil par email (findByEmail utilise une query sur la collection).
+      // Lecture du profil : tout utilisateur authentifié peut chercher par email
+      // (UserService.findByEmail utilise une query sur la collection entière).
       allow read: if request.auth != null;
 
-      // Écriture sur le document profil lui-même : uniquement le propriétaire.
-      // Couvre : ensureProfile, updateDisplayName, updateDeviceId.
-      allow write: if request.auth.uid == uid;
+      // Création du profil (ensureProfile → set() sur nouveau document) :
+      //   - Le chemin {uid} correspond à l'UID Firebase Auth de l'appelant.
+      //   - Le champ 'uid' du document est identique au chemin.
+      //   - Le champ 'email' correspond à l'email du token Firebase Auth.
+      allow create: if request.auth != null
+          && request.auth.uid == uid
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.email == request.auth.token.email;
+
+      // Mise à jour du profil (displayName, deviceId) :
+      //   - Seul le propriétaire peut modifier son profil.
+      //   - 'uid' et 'email' sont immuables après création.
+      //   - 'deviceId' doit respecter le format "MatiMatch_XXXXXXXXXXXX"
+      //     ou être null (dissociation de l'appareil).
+      allow update: if request.auth != null
+          && request.auth.uid == uid
+          && request.resource.data.uid   == resource.data.uid
+          && request.resource.data.email == resource.data.email
+          && (
+            field(request.resource.data, 'deviceId') == null
+            || field(request.resource.data, 'deviceId').matches('MatiMatch_[0-9A-Fa-f]{12}')
+          );
+
+      // Suppression du profil interdite depuis le client.
 
 
-      // ── Sous-collection friends ───────────────────────────────────────────
-      // Lecture et écriture : uniquement le propriétaire de la liste.
-      // Le service Flutter (SocialService.addFriend) effectue un batch write
-      // qui écrit des deux côtés, mais chaque écriture est exécutée sous
-      // l'identité de l'utilisateur connecté qui, par construction, est l'un
-      // des deux participants.
-      // Note : l'amitié bidirectionnelle est assurée côté Flutter ; les règles
-      // garantissent que personne d'autre ne peut modifier tes amis.
+      // ── Sous-collection : friends ─────────────────────────────────────────
+      // Chaque document représente un ami : users/{uid}/friends/{friendUid}
+      //
+      // ⚠️ Problème de la relation bidirectionnelle :
+      //   SocialService.addFriend() écrit dans les deux listes via un batch.
+      //   Alice (auth.uid=A) écrit users/A/friends/B (sa liste → règle owner)
+      //   ET users/B/friends/A (liste de Bob → règle self-insert ci-dessous).
+      //
+      // Règle self-insert : Bob (friendUid=B, auth.uid=B) peut s'insérer dans
+      //   la liste d'Alice (uid=A) si le document indique bien son propre uid.
+      //   Ceci empêche Alice d'insérer Charlie dans la liste de Bob.
+      //
+      // ── Modèle futur (friendRequests) ────────────────────────────────────
+      //   Pour un vrai système demande/acceptation, décommenter la section
+      //   friendRequests ci-dessous et mettre à jour SocialService.addFriend()
+      //   pour écrire users/{Bob}/friendRequests/{Alice} au lieu du batch direct.
+      //   La règle self-insert deviendrait alors :
+      //     allow create: if auth.uid == friendUid
+      //         && exists(.../users/{friendUid}/friendRequests/{uid});
+      //   (Bob peut s'insérer dans la liste d'Alice seulement si Alice lui a
+      //   envoyé une demande préalable.)
       match /friends/{friendUid} {
-        allow read, write: if request.auth.uid == uid;
+        allow read: if request.auth.uid == uid;
+
+        // Propriétaire gère sa propre liste (initiateur du batch).
+        allow write: if request.auth.uid == uid;
+
+        // Self-insert : l'utilisateur représenté par friendUid peut s'ajouter
+        // à la liste de uid, à condition que le document contienne son propre uid.
+        // Empêche : Alice d'ajouter Charlie dans la liste de Bob.
+        allow create: if request.auth.uid == friendUid
+            && request.resource.data.uid == request.auth.uid;
+
+        // Self-remove : symétrique pour la suppression (SocialService.removeFriend).
+        allow delete: if request.auth.uid == friendUid;
       }
 
 
-      // ── Sous-collection received ──────────────────────────────────────────
-      // Reçus = pronostics partagés par un ami.
+      // ── Sous-collection : friendRequests (RÉSERVÉ — décommenter après migration) ──
+      // Modèle demande/acceptation explicite.
+      // Chaque document : users/{uid}/friendRequests/{senderUid}
+      //   fromUid    : UID de l'expéditeur
+      //   fromName   : Pseudonyme
+      //   fromEmail  : Email
+      //   status     : 'pending' (seule valeur autorisée à la création)
+      //   createdAt  : horodatage
+      //
+      // match /friendRequests/{senderUid} {
+      //   // Destinataire lit ses demandes entrantes.
+      //   allow read: if request.auth.uid == uid;
+      //
+      //   // Expéditeur crée une demande en son propre nom.
+      //   allow create: if request.auth.uid == senderUid
+      //       && request.resource.data.fromUid == request.auth.uid
+      //       && request.resource.data.status  == 'pending';
+      //
+      //   // Expéditeur peut annuler sa demande, destinataire peut l'accepter/rejeter.
+      //   allow delete: if request.auth.uid == uid
+      //       || request.auth.uid == senderUid;
+      // }
+
+
+      // ── Sous-collection : received ────────────────────────────────────────
+      // Pronostics reçus d'un ami : users/{uid}/received/{predId}
       match /received/{predId} {
 
-        // Lecture : uniquement le destinataire (le propriétaire de la boîte).
+        // Lecture : uniquement le destinataire.
         allow read: if request.auth.uid == uid;
 
-        // Création d'un document reçu.
-        // Trois conditions :
-        //   (1) l'expéditeur est authentifié
-        //   (2) le champ fromUid correspond à son identité réelle
-        //       (empêche l'usurpation : Alice ne peut pas envoyer au nom de Bob)
-        //   (3) l'expéditeur est bien un ami du destinataire
-        //       (empêche le spam : seuls les amis peuvent partager)
+        // Création d'un pronostic partagé.
+        //   (1) L'expéditeur est authentifié.
+        //   (2) Le champ 'fromUid' correspond à son identité réelle.
+        //       → empêche l'usurpation (Alice ne peut pas envoyer au nom de Bob).
+        //   (3) L'expéditeur est un ami du destinataire.
+        //       → empêche le spam vers des inconnus.
         allow create: if request.auth != null
             && request.resource.data.fromUid == request.auth.uid
             && exists(/databases/$(database)/documents
                       /users/$(uid)/friends/$(request.auth.uid));
 
-        // Mise à jour (seul usage : mqttStatus "pending" → "sent").
-        // Mêmes conditions que la création :
-        //   - l'expéditeur original doit être l'auteur du document
-        //   - l'amitié doit toujours exister
+        // Mise à jour : UNIQUEMENT la transition mqttStatus 'pending' → 'sent'.
+        //   - Aucun autre champ ne peut être modifié après création.
+        //   - L'expéditeur original est le seul autorisé.
+        //   - L'amitié doit toujours exister.
+        //   - La transition inverse ('sent' → 'pending') est interdite.
         allow update: if request.auth != null
             && resource.data.fromUid == request.auth.uid
             && exists(/databases/$(database)/documents
-                      /users/$(uid)/friends/$(request.auth.uid));
+                      /users/$(uid)/friends/$(request.auth.uid))
+            && request.resource.data.diff(resource.data)
+                                    .affectedKeys()
+                                    .hasOnly(['mqttStatus'])
+            && resource.data.mqttStatus         == 'pending'
+            && request.resource.data.mqttStatus == 'sent';
 
         // Suppression interdite depuis le client.
-        // (À implémenter via Cloud Function si besoin ultérieurement.)
       }
     }
 

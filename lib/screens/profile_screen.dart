@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/prediction.dart';
 import '../services/auth_service.dart';
+import '../services/user_service.dart';
 import '../viewmodels/auth_view_model.dart';
 import '../viewmodels/predictions_view_model.dart';
+import '../viewmodels/social_provider.dart';
+import 'friends_screen.dart';
 import 'settings_screen.dart';
 
 class ProfileScreen extends ConsumerWidget {
@@ -15,8 +18,12 @@ class ProfileScreen extends ConsumerWidget {
     final user = ref.watch(authStateProvider).valueOrNull;
     final predictions = ref.watch(predictionsProvider).valueOrNull ?? [];
 
+    final profile = ref.watch(currentUserProfileProvider).valueOrNull;
+    final friends = ref.watch(friendsProvider).valueOrNull ?? [];
+
     final email = user?.email ?? '';
-    final initial = email.isNotEmpty ? email[0].toUpperCase() : '?';
+    final displayName = profile?.displayName ?? email.split('@').first;
+    final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
 
     final won = predictions.where((p) => p.result == 'won').length;
     final lost = predictions.where((p) => p.result == 'lost').length;
@@ -81,16 +88,90 @@ class ProfileScreen extends ConsumerWidget {
                             color: Colors.white)),
                   ),
                 ),
-                const SizedBox(height: 12),
-                Text(email,
+                const SizedBox(height: 8),
+                Text(displayName,
                     style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
                         color: cs.onSurface)),
+                const SizedBox(height: 4),
+                Text(email,
+                    style: TextStyle(fontSize: 13, color: cs.outline)),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: () => _editDisplayName(context, ref, displayName),
+                  icon: const Icon(Icons.edit_rounded, size: 15),
+                  label: const Text('Modifier le pseudo',
+                      style: TextStyle(fontSize: 13)),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: Size.zero,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 6),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20)),
+                  ),
+                ),
               ],
             ),
           ),
-          const SizedBox(height: 28),
+          const SizedBox(height: 24),
+
+          // ── MatiMatch Connect ─────────────────────────────────────────
+          _SectionTitle('MatiMatch Connect'),
+          const SizedBox(height: 10),
+          _Card(
+            child: Column(
+              children: [
+                // Bouton amis
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    backgroundColor: cs.primaryContainer,
+                    child: Icon(Icons.people_rounded,
+                        color: cs.onPrimaryContainer, size: 20),
+                  ),
+                  title: const Text('Mes amis',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: Text('${friends.length} ami(s)',
+                      style:
+                          TextStyle(fontSize: 12, color: cs.outline)),
+                  trailing:
+                      const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const FriendsScreen()),
+                  ),
+                ),
+                Divider(height: 1, color: cs.outlineVariant),
+                // Device ID
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    backgroundColor: cs.secondaryContainer,
+                    child: Icon(Icons.developer_board_rounded,
+                        color: cs.onSecondaryContainer, size: 20),
+                  ),
+                  title: const Text('Appareil associé',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: Text(
+                    profile?.deviceId?.isNotEmpty == true
+                        ? profile!.deviceId!
+                        : 'Aucun appareil',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: profile?.deviceId != null
+                            ? cs.primary
+                            : cs.outline),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _editDeviceId(context, ref, profile?.deviceId),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
 
           // ── Taux de réussite ─────────────────────────────────────────
           _SectionTitle('Taux de réussite'),
@@ -132,6 +213,7 @@ class ProfileScreen extends ConsumerWidget {
           ],
 
           // ── Se déconnecter ───────────────────────────────────────────
+          const SizedBox(height: 4),
           OutlinedButton.icon(
             onPressed: () => AuthService.signOut(),
             icon: Icon(Icons.logout_rounded, color: cs.error),
@@ -148,6 +230,96 @@ class ProfileScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+// ── Helpers dialogs ───────────────────────────────────────────────────────────
+Future<void> _editDisplayName(
+    BuildContext context, WidgetRef ref, String current) async {
+  final ctrl = TextEditingController(text: current);
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Modifier le pseudo'),
+      content: TextField(
+        controller: ctrl,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: 'Pseudonyme'),
+        textCapitalization: TextCapitalization.words,
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Annuler')),
+        FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Enregistrer')),
+      ],
+    ),
+  );
+  final name = ctrl.text.trim();
+  ctrl.dispose();
+  if (confirmed == true) {
+    final uid = ref.read(authStateProvider).valueOrNull?.uid;
+    if (uid == null) return;
+    await UserService.updateDisplayName(uid, name);
+  }
+}
+
+Future<void> _editDeviceId(
+    BuildContext context, WidgetRef ref, String? current) async {
+  final ctrl = TextEditingController(text: current ?? '');
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Associer un appareil'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Saisissez l\'ID affiché dans le Serial Monitor de votre ESP32 au démarrage.',
+            style: TextStyle(
+                fontSize: 13,
+                color: Theme.of(ctx).colorScheme.outline),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Device ID',
+              hintText: 'MatiMatch_AABBCCDDEEFF',
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        if (current != null)
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Dissocier',
+                style: TextStyle(
+                    color: Theme.of(ctx).colorScheme.error)),
+          ),
+        TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Annuler')),
+        FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Enregistrer')),
+      ],
+    ),
+  );
+  final deviceText = ctrl.text.trim();
+  ctrl.dispose();
+  if (confirmed == null) return; // Annuler
+  final uid = ref.read(authStateProvider).valueOrNull?.uid;
+  if (uid == null) return;
+  if (confirmed == true) {
+    await UserService.updateDeviceId(uid, deviceText);
+  } else {
+    await UserService.updateDeviceId(uid, null); // Dissocier
   }
 }
 

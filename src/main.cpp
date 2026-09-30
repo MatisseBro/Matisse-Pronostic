@@ -35,7 +35,7 @@ PubSubClient     mqttClient(espClient);
 #define TOPIC_BUTTON      "matimatch/device/button"
 #define TOPIC_STATUS      "matimatch/device/status"
 
-String generateClientId() {
+String generateDeviceId() {
   uint8_t mac[6];
   WiFi.macAddress(mac);
   char id[32];
@@ -43,6 +43,9 @@ String generateClientId() {
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   return String(id);
 }
+
+String deviceId;           // Initialisé dans setup() après WiFi.begin()
+String topicDevicePred;    // "matimatch/device/{deviceId}/prediction"
 
 unsigned long lastReconnectAttempt = 0;
 
@@ -63,11 +66,12 @@ struct PredictionData {
   String selection;
   float  odds;
   int    confidence;
+  String fromName;   // Vide si pronostic personnel, rempli si partagé
   bool   hasData;
 };
 
 MatchData      currentMatch      = {"", "", 0, 0, "", "", false};
-PredictionData currentPrediction = {"", "", 0.0f, 0, false};
+PredictionData currentPrediction = {"", "", 0.0f, 0, "", false};
 
 // ── Helpers OLED ──────────────────────────────────────────────────────────────
 void oledHeader() {
@@ -127,15 +131,7 @@ void showMatch(const MatchData& m) {
   Serial.println("[OLED] Match affiche");
 }
 
-// Affichage d'un pronostic sur l'OLED
-// Layout (texte taille 1 = 6x8px → 21 chars/ligne) :
-//  y=4  : header MATIMATCH
-//  y=14 : ligne horizontale
-//  y=18 : matchLabel ligne 1 (21 chars max)
-//  y=28 : matchLabel ligne 2 si > 21 chars
-//  y=42 : "Prono : " + selection
-//  y=54 : "Cote  : " + odds
-//  y=66 : "Conf  : " + étoiles (ex: ***--)
+// Affichage d'un pronostic personnel sur l'OLED
 void showPrediction(const PredictionData& p) {
   display.clearDisplay();
   oledHeader();
@@ -143,7 +139,7 @@ void showPrediction(const PredictionData& p) {
   display.setTextSize(1);
   display.setTextColor(SH110X_WHITE);
 
-  // Affichage du match (1 ou 2 lignes selon longueur)
+  // Match (1 ou 2 lignes)
   if (p.matchLabel.length() > 21) {
     display.setCursor(0, 18);
     display.print(p.matchLabel.substring(0, 21));
@@ -156,25 +152,66 @@ void showPrediction(const PredictionData& p) {
     display.print(p.matchLabel);
   }
 
-  // Pronostic (1 / N / 2)
   display.setCursor(0, 42);
   display.print("Prono : ");
   display.print(p.selection);
 
-  // Cote
   display.setCursor(0, 54);
   display.print("Cote  : ");
   display.print(p.odds, 2);
 
-  // Confiance : étoiles ASCII (* = rempli, - = vide)
   display.setCursor(0, 66);
   display.print("Conf  : ");
-  for (int i = 0; i < 5; i++) {
-    display.print(i < p.confidence ? "*" : "-");
-  }
+  for (int i = 0; i < 5; i++) display.print(i < p.confidence ? "*" : "-");
 
   display.display();
   Serial.println("[OLED] Pronostic affiche");
+}
+
+// Affichage d'un pronostic partagé par un ami
+// Layout :
+//  y=4  : MATIMATCH (header)
+//  y=14 : ligne horizontale
+//  y=20 : "NOUVEAU PRONO" (taille 1)
+//  y=32 : "DE: " + fromName (tronqué à 17 chars)
+//  y=46 : matchLabel ligne 1
+//  y=56 : matchLabel ligne 2 si > 21 chars
+//  y=72 : selection + " x " + odds
+void showSharedPrediction(const PredictionData& p) {
+  display.clearDisplay();
+  oledHeader();
+
+  display.setTextSize(1);
+  display.setTextColor(SH110X_WHITE);
+
+  display.setCursor(20, 20);
+  display.print("NOUVEAU PRONO");
+
+  String from = "DE: " + (p.fromName.length() > 17 ? p.fromName.substring(0, 17) : p.fromName);
+  display.setCursor(0, 32);
+  display.print(from);
+
+  // Match (1 ou 2 lignes)
+  if (p.matchLabel.length() > 21) {
+    display.setCursor(0, 46);
+    display.print(p.matchLabel.substring(0, 21));
+    display.setCursor(0, 56);
+    String rest = p.matchLabel.substring(21);
+    if (rest.length() > 21) rest = rest.substring(0, 21);
+    display.print(rest);
+  } else {
+    display.setCursor(0, 50);
+    display.print(p.matchLabel);
+  }
+
+  // Sélection × cote (ex: "1 x 1.85")
+  display.setCursor(0, 72);
+  display.print(p.selection);
+  display.print(" x ");
+  display.print(p.odds, 2);
+
+  display.display();
+  Serial.printf("[OLED] Prono partage de %s\n", p.fromName.c_str());
 }
 
 // ── Callback MQTT ─────────────────────────────────────────────────────────────
@@ -220,8 +257,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     showMatch(currentMatch);
   }
 
-  // ── Topic : pronostic ──────────────────────────────────────────────────────
-  else if (topicStr == TOPIC_PREDICTION) {
+  // ── Topic : pronostic (global ou par appareil) ────────────────────────────
+  else if (topicStr == TOPIC_PREDICTION || topicStr == topicDevicePred) {
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, msg);
     if (err != DeserializationError::Ok) {
@@ -243,9 +280,18 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     currentPrediction.confidence = doc["confidence"] | 1;
     currentPrediction.hasData    = true;
 
-    Serial.printf("[PRONO] %s | %s | %.2f | conf=%d\n",
-      ml, sel, currentPrediction.odds, currentPrediction.confidence);
-    showPrediction(currentPrediction);
+    const char* fn = doc["fromName"];
+    currentPrediction.fromName = fn ? String(fn) : "";
+
+    if (currentPrediction.fromName.length() > 0) {
+      Serial.printf("[PRONO] Partage de %s : %s | %s | %.2f\n",
+        fn, ml, sel, currentPrediction.odds);
+      showSharedPrediction(currentPrediction);
+    } else {
+      Serial.printf("[PRONO] %s | %s | %.2f | conf=%d\n",
+        ml, sel, currentPrediction.odds, currentPrediction.confidence);
+      showPrediction(currentPrediction);
+    }
   }
 
   else {
@@ -258,11 +304,10 @@ bool mqttConnect() {
   espClient.stop();
   delay(100);
 
-  String clientId = generateClientId();
-  Serial.print("[MQTT] Connexion [" + clientId + "]...");
+  Serial.print("[MQTT] Connexion [" + deviceId + "]...");
 
   bool ok = mqttClient.connect(
-    clientId.c_str(),
+    deviceId.c_str(),
     MQTT_USER, MQTT_PASS,
     TOPIC_STATUS, 1, true, "OFFLINE"
   );
@@ -275,11 +320,13 @@ bool mqttConnect() {
   Serial.println(" OK");
   mqttClient.publish(TOPIC_STATUS, "ONLINE", true);
 
-  bool sub1 = mqttClient.subscribe(TOPIC_MATCH,      0);
-  bool sub2 = mqttClient.subscribe(TOPIC_PREDICTION, 0);
+  bool sub1 = mqttClient.subscribe(TOPIC_MATCH,            0);
+  bool sub2 = mqttClient.subscribe(TOPIC_PREDICTION,       0);
+  bool sub3 = mqttClient.subscribe(topicDevicePred.c_str(), 0);
 
-  Serial.printf("[MQTT] Subscribe match=%s  prediction=%s\n",
-    sub1 ? "OK" : "FAIL", sub2 ? "OK" : "FAIL");
+  Serial.printf("[MQTT] Sub match=%s global=%s device=%s\n",
+    sub1 ? "OK" : "FAIL", sub2 ? "OK" : "FAIL", sub3 ? "OK" : "FAIL");
+  Serial.println("[MQTT] Topic perso: " + topicDevicePred);
 
   return true;
 }
@@ -323,6 +370,13 @@ void setup() {
     Serial.print(".");
   }
   Serial.println(" OK");
+
+  // Identifiant unique de l'appareil (dérivé de l'adresse MAC)
+  deviceId       = generateDeviceId();
+  topicDevicePred = "matimatch/device/" + deviceId + "/prediction";
+  Serial.println("====================================");
+  Serial.println("DEVICE ID: " + deviceId);
+  Serial.println("====================================");
 
   // TLS sans vérification de certificat (Wokwi ne supporte pas les bundles CA)
   espClient.setInsecure();

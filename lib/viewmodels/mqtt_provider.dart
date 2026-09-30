@@ -12,7 +12,9 @@ final mqttServiceProvider = Provider<MqttService>((ref) {
 });
 
 final mqttRepositoryProvider = Provider<MqttRepository>((ref) {
-  return MqttRepository(ref.watch(mqttServiceProvider));
+  final repo = MqttRepository(ref.watch(mqttServiceProvider));
+  ref.onDispose(repo.dispose);
+  return repo;
 });
 
 // ── État de connexion MQTT Flutter ────────────────────────────────────────────

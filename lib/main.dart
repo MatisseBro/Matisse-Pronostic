@@ -14,6 +14,7 @@ import 'services/cache_service.dart';
 import 'viewmodels/auth_view_model.dart';
 import 'viewmodels/matches_view_model.dart';
 import 'services/mqtt_service.dart';
+import 'services/user_service.dart';
 import 'viewmodels/mqtt_provider.dart';
 
 Future<void> main() async {
@@ -173,20 +174,29 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   Future<void> _initMqtt() async {
+    // Crée le profil Firestore si l'utilisateur se connecte pour la première fois.
+    final user = ref.read(authStateProvider).valueOrNull;
+    if (user != null) {
+      await UserService.ensureProfile(user);
+    }
+
     final repo = ref.read(mqttRepositoryProvider);
 
     repo.stateStream.listen((s) {
       if (!mounted) return;
+      debugPrint('[MQTT] État Flutter: $s');
       ref.read(mqttConnectedProvider.notifier).state =
           s == MqttState.connected;
     });
 
     repo.deviceStatusStream.listen((status) {
       if (!mounted) return;
+      debugPrint('[DEVICE] Statut ESP32 reçu: "$status"');
       ref.read(deviceStatusProvider.notifier).state = status.trim();
     });
 
-    await repo.connect();
+    final ok = await repo.connect();
+    debugPrint('[MQTT] connect() → $ok');
   }
 
   @override

@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/prediction.dart';
-import '../services/firestore_service.dart';
+import '../models/user_profile.dart';
+import '../services/social_service.dart';
+import '../viewmodels/auth_view_model.dart';
 import '../viewmodels/matches_view_model.dart';
+import '../viewmodels/mqtt_provider.dart';
 import '../viewmodels/predictions_view_model.dart';
+import '../viewmodels/social_provider.dart';
 
 class AddPredictionScreen extends ConsumerStatefulWidget {
   final String? initialMatchLabel;
@@ -124,30 +128,97 @@ class _AddPredictionScreenState extends ConsumerState<AddPredictionScreen> {
       return;
     }
 
+    if (!mounted) return;
+
+    // Propose de partager avec des amis avant de quitter.
+    await _showShareDialog(prediction);
+
     if (mounted) {
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          title: const Text('✓ Firestore OK'),
-          content: SelectableText(
-            'Document confirmé côté serveur (REST).\n\n'
-            'ID : ${prediction.id}\n'
-            'Projet : ${FirestoreService.projectId}',
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () {
-                Navigator.of(ctx).pop();
-                ref.read(selectedTabProvider.notifier).state = 0;
-                Navigator.of(context).popUntil((route) => route.isFirst);
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
+      ref.read(selectedTabProvider.notifier).state = 0;
+      Navigator.of(context).popUntil((route) => route.isFirst);
     }
+  }
+
+  Future<void> _showShareDialog(Prediction prediction) async {
+    final friends =
+        ref.read(friendsProvider).valueOrNull ?? <UserProfile>[];
+    final myProfile = ref.read(currentUserProfileProvider).valueOrNull;
+    final senderName = myProfile?.displayName ??
+        ref.read(authStateProvider).valueOrNull?.email?.split('@').first ??
+        '?';
+
+    // Sélection initiale : tous décochés
+    final selected = {for (final f in friends) f.uid: false};
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) {
+          final anySelected = selected.values.any((v) => v);
+          return AlertDialog(
+            title: const Text('Pronostic enregistré !',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+            content: friends.isEmpty
+                ? const Text(
+                    'Ajoute des amis dans ton profil pour partager tes pronos.')
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Partager avec :',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600, fontSize: 14)),
+                      const SizedBox(height: 8),
+                      ...friends.map((f) => CheckboxListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            value: selected[f.uid],
+                            onChanged: (v) =>
+                                setState(() => selected[f.uid] = v ?? false),
+                            title: Text(f.displayName,
+                                style: const TextStyle(fontSize: 14)),
+                            subtitle: Text(f.email,
+                                style: const TextStyle(fontSize: 11)),
+                          )),
+                    ],
+                  ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Passer'),
+              ),
+              if (friends.isNotEmpty)
+                FilledButton(
+                  onPressed: anySelected
+                      ? () async {
+                          Navigator.of(ctx).pop();
+                          final recipients = friends
+                              .where((f) => selected[f.uid] == true)
+                              .toList();
+                          final mqtt = ref.read(mqttRepositoryProvider);
+                          await SocialService.sharePrediction(
+                            prediction: prediction,
+                            senderName: senderName,
+                            recipients: recipients,
+                            mqtt: mqtt,
+                          );
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                    'Partagé avec ${recipients.length} ami(s) !'),
+                              ),
+                            );
+                          }
+                        }
+                      : null,
+                  child: const Text('Partager'),
+                ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   String? get _kickoffWarning {

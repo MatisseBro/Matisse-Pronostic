@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/prediction.dart';
+import '../models/shared_prediction.dart';
 import '../viewmodels/auth_view_model.dart';
 import '../viewmodels/predictions_view_model.dart';
+import '../viewmodels/social_provider.dart';
 import 'add_prediction_screen.dart';
 import 'prediction_detail_screen.dart';
 
@@ -11,43 +13,321 @@ class PredictionsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final asyncPredictions = ref.watch(predictionsProvider);
     final isAdmin = ref.watch(isAdminProvider);
     final cs = Theme.of(context).colorScheme;
+    final received = ref.watch(receivedPredictionsProvider).valueOrNull ?? [];
 
-    return Scaffold(
-      backgroundColor: cs.surfaceContainerLowest,
-      appBar: AppBar(
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
         backgroundColor: cs.surfaceContainerLowest,
-        title: Text(
-          'Pronostics',
-          style: TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: 20,
-            color: cs.onSurface,
-            letterSpacing: -0.5,
+        appBar: AppBar(
+          backgroundColor: cs.surfaceContainerLowest,
+          title: Text(
+            'Pronostics',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 20,
+              color: cs.onSurface,
+              letterSpacing: -0.5,
+            ),
+          ),
+          bottom: TabBar(
+            tabs: [
+              const Tab(text: 'Mes pronos'),
+              Tab(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Reçus'),
+                    if (received.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: cs.primary,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text('${received.length}',
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: cs.onPrimary)),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        floatingActionButton: isAdmin
+            ? FloatingActionButton.extended(
+                onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const AddPredictionScreen())),
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('Nouveau',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+              )
+            : null,
+        body: TabBarView(
+          children: [
+            // ── Onglet Mes pronos ──────────────────────────────────────
+            Consumer(builder: (context, ref, _) {
+              return ref.watch(predictionsProvider).when(
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                    error: (e, _) => Center(child: Text('Erreur : $e')),
+                    data: (predictions) => predictions.isEmpty
+                        ? const _EmptyState()
+                        : _PredictionList(predictions: predictions),
+                  );
+            }),
+            // ── Onglet Reçus ───────────────────────────────────────────
+            Consumer(builder: (context, ref, _) {
+              final asyncReceived = ref.watch(receivedPredictionsProvider);
+              return asyncReceived.when(
+                loading: () =>
+                    const Center(child: CircularProgressIndicator()),
+                error: (e, _) => Center(child: Text('Erreur : $e')),
+                data: (items) => items.isEmpty
+                    ? const _EmptyReceivedState()
+                    : _ReceivedList(items: items),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── État vide — reçus ─────────────────────────────────────────────────────────
+class _EmptyReceivedState extends StatelessWidget {
+  const _EmptyReceivedState();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: cs.secondaryContainer,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.inbox_rounded,
+                size: 48, color: cs.onSecondaryContainer),
+          ),
+          const SizedBox(height: 20),
+          Text('Aucun pronostic reçu',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurface)),
+          const SizedBox(height: 6),
+          Text('Tes amis peuvent partager leurs pronos avec toi',
+              style: TextStyle(fontSize: 13, color: cs.outline)),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Liste des pronostics reçus ────────────────────────────────────────────────
+class _ReceivedList extends StatelessWidget {
+  final List<SharedPrediction> items;
+  const _ReceivedList({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 120),
+      itemCount: items.length,
+      itemBuilder: (context, i) => _SharedCard(item: items[i]),
+    );
+  }
+}
+
+// ── Carte d'un pronostic reçu ─────────────────────────────────────────────────
+class _SharedCard extends StatelessWidget {
+  final SharedPrediction item;
+  const _SharedCard({required this.item});
+
+  static Color _selectionColor(String s) => switch (s) {
+        '1' => const Color(0xFF16A34A),
+        'N' => const Color(0xFF6B7280),
+        _ => const Color(0xFF2563EB),
+      };
+
+  static String _selectionLabel(String s) => switch (s) {
+        '1' => 'Domicile',
+        'N' => 'Nul',
+        _ => 'Extérieur',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final color = _selectionColor(item.selection);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: cs.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: cs.outlineVariant),
+        ),
+        child: IntrinsicHeight(
+          child: Row(
+            children: [
+              Container(
+                width: 5,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    bottomLeft: Radius.circular(16),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Expéditeur
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 12,
+                            backgroundColor: cs.primaryContainer,
+                            child: Text(
+                              item.fromName.isNotEmpty
+                                  ? item.fromName[0].toUpperCase()
+                                  : '?',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: cs.onPrimaryContainer),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(item.fromName,
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: cs.primary)),
+                          const Spacer(),
+                          Text(
+                            _formatDate(item.createdAt),
+                            style:
+                                TextStyle(fontSize: 11, color: cs.outline),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Match
+                      Text(item.matchLabel,
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 10),
+
+                      // Sélection + cote
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.10),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                  color: color.withValues(alpha: 0.25)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(item.selection,
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        color: color,
+                                        fontSize: 16)),
+                                Text(
+                                  '  ×${item.odds.toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: color,
+                                      fontSize: 13),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            _selectionLabel(item.selection),
+                            style:
+                                TextStyle(color: cs.outline, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Confiance
+                      Row(
+                        children: [
+                          ...List.generate(
+                              5,
+                              (i) => Icon(
+                                    i < item.confidence
+                                        ? Icons.star_rounded
+                                        : Icons.star_outline_rounded,
+                                    size: 18,
+                                    color: Colors.amber.shade500,
+                                  )),
+                          const SizedBox(width: 6),
+                          Text('${item.confidence}/5',
+                              style: TextStyle(
+                                  fontSize: 12, color: cs.outline)),
+                        ],
+                      ),
+
+                      // Commentaire
+                      if (item.comment.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text('"${item.comment}"',
+                            style: TextStyle(
+                                fontStyle: FontStyle.italic,
+                                fontSize: 13,
+                                color: cs.outline)),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
-      floatingActionButton: isAdmin
-          ? FloatingActionButton.extended(
-              onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const AddPredictionScreen())),
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('Nouveau',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
-            )
-          : null,
-      body: asyncPredictions.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Erreur : $e')),
-        data: (predictions) => predictions.isEmpty
-            ? const _EmptyState()
-            : _PredictionList(predictions: predictions),
-      ),
     );
+  }
+
+  String _formatDate(DateTime dt) {
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return 'À l\'instant';
+    if (diff.inHours < 1) return 'Il y a ${diff.inMinutes} min';
+    if (diff.inDays < 1) return 'Il y a ${diff.inHours} h';
+    return '${dt.day}/${dt.month}/${dt.year}';
   }
 }
 

@@ -31,7 +31,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     try {
       await AuthService.register(_emailCtrl.text.trim(), _passCtrl.text.trim());
-      // authStateProvider détecte la connexion et redirige automatiquement
+      // Pop RegisterScreen — authStateProvider a déjà changé home → HomePage.
+      if (mounted) Navigator.of(context).pop();
     } on Exception catch (e) {
       setState(() => _error = _friendlyError(e.toString()));
     } finally {

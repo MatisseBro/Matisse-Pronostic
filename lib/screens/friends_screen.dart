@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../models/friend_request.dart';
 import '../models/user_profile.dart';
 import '../services/social_service.dart';
 import '../services/user_service.dart';
@@ -48,17 +49,58 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
     }
   }
 
-  Future<void> _addFriend(UserProfile friend) async {
+  Future<void> _sendRequest(UserProfile target) async {
     final myProfile = ref.read(currentUserProfileProvider).valueOrNull;
     if (myProfile == null) return;
 
     try {
-      await SocialService.addFriend(myProfile, friend);
+      await SocialService.sendFriendRequest(myProfile, target);
       if (!mounted) return;
       setState(() { _foundUser = null; _emailCtrl.clear(); });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${friend.displayName} ajouté(e) comme ami(e) !')),
+        SnackBar(content: Text('Demande envoyée à ${target.displayName} !')),
       );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erreur : $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Future<void> _acceptRequest(FriendRequest request) async {
+    var myProfile = ref.read(currentUserProfileProvider).valueOrNull;
+    if (myProfile == null) {
+      final uid = ref.read(authStateProvider).valueOrNull?.uid;
+      if (uid != null) myProfile = await UserService.getProfile(uid);
+    }
+    if (myProfile == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Profil non disponible. Réessaie dans un instant.'),
+        ));
+      }
+      return;
+    }
+    try {
+      await SocialService.acceptFriendRequest(myProfile, request);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${request.fromName} ajouté(e) comme ami(e) !')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erreur : $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Future<void> _declineRequest(FriendRequest request) async {
+    final myUid = ref.read(authStateProvider).valueOrNull?.uid;
+    if (myUid == null) return;
+    try {
+      await SocialService.declineFriendRequest(myUid, request.fromUid);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -70,7 +112,8 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final friends = ref.watch(friendsProvider).valueOrNull ?? [];
+    final friends  = ref.watch(friendsProvider).valueOrNull ?? [];
+    final requests = ref.watch(friendRequestsProvider).valueOrNull ?? [];
 
     return Scaffold(
       backgroundColor: cs.surfaceContainerLowest,
@@ -82,6 +125,7 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
         children: [
+
           // ── Ajouter un ami ────────────────────────────────────────────────
           _SectionTitle('Ajouter un ami'),
           const SizedBox(height: 10),
@@ -126,8 +170,7 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
                       onPressed: _searching ? null : _search,
                       child: _searching
                           ? const SizedBox(
-                              width: 18,
-                              height: 18,
+                              width: 18, height: 18,
                               child: CircularProgressIndicator(
                                   strokeWidth: 2, color: Colors.white))
                           : const Text('Chercher'),
@@ -144,9 +187,9 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
                   _UserTile(
                     profile: _foundUser!,
                     trailing: FilledButton.icon(
-                      onPressed: () => _addFriend(_foundUser!),
+                      onPressed: () => _sendRequest(_foundUser!),
                       icon: const Icon(Icons.person_add_rounded, size: 16),
-                      label: const Text('Ajouter'),
+                      label: const Text('Demande'),
                     ),
                   ),
                 ],
@@ -154,6 +197,69 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
             ),
           ),
           const SizedBox(height: 28),
+
+          // ── Demandes reçues ───────────────────────────────────────────────
+          if (requests.isNotEmpty) ...[
+            _SectionTitle('Demandes reçues (${requests.length})'),
+            const SizedBox(height: 10),
+            Container(
+              decoration: BoxDecoration(
+                color: cs.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: cs.outlineVariant),
+              ),
+              child: Column(
+                children: requests.asMap().entries.map((entry) {
+                  final i = entry.key;
+                  final req = entry.value;
+                  return Column(
+                    children: [
+                      ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        leading: CircleAvatar(
+                          backgroundColor: cs.secondaryContainer,
+                          child: Text(
+                            req.fromName.isNotEmpty
+                                ? req.fromName[0].toUpperCase()
+                                : '?',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: cs.onSecondaryContainer),
+                          ),
+                        ),
+                        title: Text(req.fromName,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600, fontSize: 15)),
+                        subtitle: Text(req.fromEmail,
+                            style: TextStyle(fontSize: 12, color: cs.outline)),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: Icon(Icons.check_circle_outline_rounded,
+                                  color: cs.primary, size: 22),
+                              tooltip: 'Accepter',
+                              onPressed: () => _acceptRequest(req),
+                            ),
+                            IconButton(
+                              icon: Icon(Icons.cancel_outlined,
+                                  color: cs.error, size: 22),
+                              tooltip: 'Refuser',
+                              onPressed: () => _declineRequest(req),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (i < requests.length - 1)
+                        Divider(height: 1, indent: 56, color: cs.outlineVariant),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 28),
+          ],
 
           // ── Liste des amis ────────────────────────────────────────────────
           _SectionTitle('Amis (${friends.length})'),
@@ -189,10 +295,7 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
                         ),
                       ),
                       if (i < friends.length - 1)
-                        Divider(
-                            height: 1,
-                            indent: 56,
-                            color: cs.outlineVariant),
+                        Divider(height: 1, indent: 56, color: cs.outlineVariant),
                     ],
                   );
                 }).toList(),

@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import '../models/friend_request.dart';
 import '../models/prediction.dart';
 import '../models/shared_prediction.dart';
 import '../models/user_profile.dart';
@@ -12,25 +13,67 @@ class SocialService {
   static CollectionReference<Map<String, dynamic>> _friends(String uid) =>
       _db.collection('users').doc(uid).collection('friends');
 
+  static CollectionReference<Map<String, dynamic>> _friendRequests(String uid) =>
+      _db.collection('users').doc(uid).collection('friendRequests');
+
   static CollectionReference<Map<String, dynamic>> _received(String uid) =>
       _db.collection('users').doc(uid).collection('received');
 
-  // ── Amis ─────────────────────────────────────────────────────────────────────
+  // ── Demandes d'amitié ────────────────────────────────────────────────────────
 
-  /// Ajoute une relation d'amitié bidirectionnelle.
-  static Future<void> addFriend(UserProfile me, UserProfile friend) async {
-    final batch = _db.batch();
-    batch.set(
-      _friends(me.uid).doc(friend.uid),
-      {'uid': friend.uid, 'displayName': friend.displayName, 'email': friend.email, 'since': DateTime.now().toUtc().toIso8601String()},
+  /// Envoie une demande d'amitié à [target] (écrit dans users/{target}/friendRequests/{me.uid}).
+  static Future<void> sendFriendRequest(UserProfile me, UserProfile target) async {
+    final request = FriendRequest(
+      fromUid:   me.uid,
+      fromName:  me.displayName,
+      fromEmail: me.email,
+      createdAt: DateTime.now(),
     );
-    batch.set(
-      _friends(friend.uid).doc(me.uid),
-      {'uid': me.uid, 'displayName': me.displayName, 'email': me.email, 'since': DateTime.now().toUtc().toIso8601String()},
-    );
-    await batch.commit();
-    debugPrint('[SOCIAL] Amitié créée : ${me.uid} ↔ ${friend.uid}');
+    await _friendRequests(target.uid).doc(me.uid).set(request.toJson());
+    debugPrint('[SOCIAL] Demande envoyée : ${me.uid} → ${target.uid}');
   }
+
+  /// Accepte une demande — batch : écrit les deux côtés de l'amitié, supprime la demande.
+  /// [me] est le destinataire de la demande (celui qui accepte).
+  static Future<void> acceptFriendRequest(
+      UserProfile me, FriendRequest request) async {
+    final now = DateTime.now().toUtc().toIso8601String();
+    final batch = _db.batch();
+
+    // Destinataire ajoute l'expéditeur à sa propre liste (règle owner).
+    batch.set(
+      _friends(me.uid).doc(request.fromUid),
+      {'uid': request.fromUid, 'displayName': request.fromName,
+       'email': request.fromEmail, 'since': now},
+    );
+    // Expéditeur s'insère dans la liste du destinataire (règle self-insert).
+    // Valide car users/{me.uid}/friendRequests/{request.fromUid} existe encore.
+    batch.set(
+      _friends(request.fromUid).doc(me.uid),
+      {'uid': me.uid, 'displayName': me.displayName,
+       'email': me.email, 'since': now},
+    );
+    // Suppression de la demande.
+    batch.delete(_friendRequests(me.uid).doc(request.fromUid));
+
+    await batch.commit();
+    debugPrint('[SOCIAL] Amitié acceptée : ${me.uid} ↔ ${request.fromUid}');
+  }
+
+  /// Refuse (destinataire) ou annule (expéditeur) une demande.
+  static Future<void> declineFriendRequest(
+      String myUid, String requesterUid) async {
+    await _friendRequests(myUid).doc(requesterUid).delete();
+    debugPrint('[SOCIAL] Demande déclinée : $requesterUid → $myUid');
+  }
+
+  static Stream<List<FriendRequest>> friendRequestsStream(String uid) {
+    return _friendRequests(uid).snapshots().map((snap) => snap.docs
+        .map((d) => FriendRequest.fromJson(d.data()))
+        .toList());
+  }
+
+  // ── Amis ─────────────────────────────────────────────────────────────────────
 
   static Future<void> removeFriend(String myUid, String friendUid) async {
     final batch = _db.batch();
@@ -75,7 +118,7 @@ class SocialService {
         mqttStatus: 'pending',
       );
 
-      // 1. Firestore — idempotent (set écrase si déjà existant)
+      // 1. Firestore
       await _received(recipient.uid).doc(prediction.id).set(shared.toJson());
       debugPrint('[SOCIAL] Pronostic partagé avec ${recipient.displayName}');
 

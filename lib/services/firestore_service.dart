@@ -12,9 +12,11 @@ class FirestoreService {
 
   static String get projectId => _db.app.options.projectId;
 
-  // Flux temps réel (trié du plus récent au plus ancien)
-  static Stream<List<Prediction>> predictionsStream() {
+  // Flux temps réel filtré par propriétaire (trié du plus récent au plus ancien).
+  // Le filtre authorUid est cohérent avec la règle allow read du propriétaire.
+  static Stream<List<Prediction>> predictionsStream(String uid) {
     return _col
+        .where('authorUid', isEqualTo: uid)
         .orderBy('createdAt', descending: true)
         .snapshots()
         .map((snap) => snap.docs
@@ -30,9 +32,12 @@ class FirestoreService {
             .toList());
   }
 
-  // Chargement initial
-  static Future<List<Prediction>> getPredictions() async {
-    final snap = await _col.orderBy('createdAt', descending: true).get();
+  // Chargement initial filtré par propriétaire.
+  static Future<List<Prediction>> getPredictions(String uid) async {
+    final snap = await _col
+        .where('authorUid', isEqualTo: uid)
+        .orderBy('createdAt', descending: true)
+        .get();
     return snap.docs
         .map((doc) {
           try {

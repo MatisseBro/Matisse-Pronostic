@@ -1,30 +1,12 @@
-/**
- * Tests des règles Firestore — Firebase Emulator
- *
- * Prérequis :
- *   npm install  (dans ce dossier)
- *   firebase-tools CLI : npm install -g firebase-tools
- *
- * Lancer les tests :
- *   Depuis la racine du projet Flutter :
- *     firebase emulators:exec --only firestore "cd test/emulator && npm test"
- *
- *   Ou en deux terminaux :
- *     [1] firebase emulators:start --only firestore
- *     [2] cd test/emulator && npm test
- */
-
 'use strict';
 
 const { initializeTestEnvironment, assertFails, assertSucceeds } =
   require('@firebase/rules-unit-testing');
 const {
   doc, setDoc, updateDoc, deleteDoc, getDoc,
-  collection, addDoc,
 } = require('firebase/firestore');
 const fs   = require('fs');
 const path = require('path');
-const assert = require('assert');
 
 // ── Identifiants simulés ──────────────────────────────────────────────────────
 const ADMIN_UID   = 'uFiFjKTYUzSDlPITAC7gx9ElPcC3';
@@ -37,66 +19,53 @@ const BOB_EMAIL     = 'bob@test.com';
 const CHARLIE_EMAIL = 'charlie@test.com';
 const ADMIN_EMAIL   = 'admin@test.com';
 
-// ── Environnement ─────────────────────────────────────────────────────────────
+// ── Environnement & instances Firestore ───────────────────────────────────────
+// Instances créées UNE SEULE FOIS — évite "Firestore has already been started".
 let testEnv;
+let aliceDb, bobDb, charlieDb, adminDb, anonDb;
 
 before(async () => {
   const rulesPath = path.resolve(__dirname, '../../firestore.rules');
   testEnv = await initializeTestEnvironment({
-    projectId:  'matimatch-test',
+    projectId: 'matimatch-test',
     firestore: {
       rules: fs.readFileSync(rulesPath, 'utf8'),
       host:  '127.0.0.1',
       port:  8080,
     },
   });
+
+  aliceDb   = testEnv.authenticatedContext(ALICE_UID,   { email: ALICE_EMAIL   }).firestore();
+  bobDb     = testEnv.authenticatedContext(BOB_UID,     { email: BOB_EMAIL     }).firestore();
+  charlieDb = testEnv.authenticatedContext(CHARLIE_UID, { email: CHARLIE_EMAIL }).firestore();
+  adminDb   = testEnv.authenticatedContext(ADMIN_UID,   { email: ADMIN_EMAIL   }).firestore();
+  anonDb    = testEnv.unauthenticatedContext().firestore();
 });
 
-after(async () => {
-  await testEnv.cleanup();
-});
-
-afterEach(async () => {
-  await testEnv.clearFirestore();
-});
+after(async () => { await testEnv.cleanup(); });
+afterEach(async () => { await testEnv.clearFirestore(); });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Contexte Firebase authentifié */
-function auth(uid, email) {
-  return testEnv.authenticatedContext(uid, { email });
-}
-
-/** Contexte Firebase non authentifié */
-function anon() {
-  return testEnv.unauthenticatedContext();
-}
-
-/** Crée un pronostic legacy (sans authorUid) via le bypass admin Firestore */
 async function createLegacyPrediction(id) {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(doc(ctx.firestore(), 'predictions', id), {
       matchLabel: 'Monaco - PSG', selection: '1',
-      odds: 2.10, confidence: 3,
-      createdAt: new Date().toISOString(),
-      // authorUid intentionnellement absent
+      odds: 2.10, confidence: 3, createdAt: new Date().toISOString(),
     });
   });
 }
 
-/** Crée un pronostic standard (avec authorUid) */
 async function createPrediction(id, ownerUid) {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(doc(ctx.firestore(), 'predictions', id), {
       matchLabel: 'Lyon - Rennes', selection: '2',
-      odds: 3.00, confidence: 4,
-      createdAt: new Date().toISOString(),
+      odds: 3.00, confidence: 4, createdAt: new Date().toISOString(),
       authorUid: ownerUid,
     });
   });
 }
 
-/** Crée le profil d'un utilisateur */
 async function createProfile(uid, email) {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(doc(ctx.firestore(), 'users', uid), {
@@ -106,33 +75,37 @@ async function createProfile(uid, email) {
   });
 }
 
-/** Crée une relation d'amitié bidirectionnelle */
 async function createFriendship(uidA, nameA, emailA, uidB, nameB, emailB) {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
-    await setDoc(
-      doc(ctx.firestore(), 'users', uidA, 'friends', uidB),
-      { uid: uidB, displayName: nameB, email: emailB }
-    );
-    await setDoc(
-      doc(ctx.firestore(), 'users', uidB, 'friends', uidA),
-      { uid: uidA, displayName: nameA, email: emailA }
-    );
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'users', uidA, 'friends', uidB),
+      { uid: uidB, displayName: nameB, email: emailB });
+    await setDoc(doc(db, 'users', uidB, 'friends', uidA),
+      { uid: uidA, displayName: nameA, email: emailA });
   });
 }
 
-/** Crée un pronostic reçu */
+async function createAliceBobFriendship() {
+  await createFriendship(ALICE_UID, 'Alice', ALICE_EMAIL, BOB_UID, 'Bob', BOB_EMAIL);
+}
+
+async function createFriendRequest(fromUid, fromName, fromEmail, toUid) {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'users', toUid, 'friendRequests', fromUid), {
+      fromUid, fromName, fromEmail, status: 'pending',
+      createdAt: new Date().toISOString(),
+    });
+  });
+}
+
 async function createReceived(recipientUid, predId, fromUid, status = 'pending') {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
-    await setDoc(
-      doc(ctx.firestore(), 'users', recipientUid, 'received', predId),
-      {
-        id: predId, fromUid, fromName: 'Expéditeur',
-        matchLabel: 'PSG - Lyon', selection: '1',
-        odds: 1.65, confidence: 4, comment: '',
-        createdAt: new Date().toISOString(),
-        mqttStatus: status,
-      }
-    );
+    await setDoc(doc(ctx.firestore(), 'users', recipientUid, 'received', predId), {
+      id: predId, fromUid, fromName: 'Expéditeur',
+      matchLabel: 'PSG - Lyon', selection: '1',
+      odds: 1.65, confidence: 4, comment: '',
+      createdAt: new Date().toISOString(), mqttStatus: status,
+    });
   });
 }
 
@@ -140,16 +113,22 @@ async function createReceived(recipientUid, predId, fromUid, status = 'pending')
 // predictions — LECTURE
 // ═════════════════════════════════════════════════════════════════════════════
 describe('predictions — read', () => {
-  before(async () => { await createPrediction('p1', ALICE_UID); });
+  beforeEach(async () => { await createPrediction('p1', ALICE_UID); });
 
-  it('utilisateur authentifié peut lire', async () => {
-    const db = auth(BOB_UID, BOB_EMAIL).firestore();
-    await assertSucceeds(getDoc(doc(db, 'predictions', 'p1')));
+  it('propriétaire lit son propre pronostic', async () => {
+    await assertSucceeds(getDoc(doc(aliceDb, 'predictions', 'p1')));
+  });
+
+  it('autre utilisateur ne peut pas lire le prono d\'Alice', async () => {
+    await assertFails(getDoc(doc(bobDb, 'predictions', 'p1')));
+  });
+
+  it('admin lit n\'importe quel pronostic', async () => {
+    await assertSucceeds(getDoc(doc(adminDb, 'predictions', 'p1')));
   });
 
   it('non authentifié ne peut pas lire', async () => {
-    const db = anon().firestore();
-    await assertFails(getDoc(doc(db, 'predictions', 'p1')));
+    await assertFails(getDoc(doc(anonDb, 'predictions', 'p1')));
   });
 });
 
@@ -159,35 +138,30 @@ describe('predictions — read', () => {
 describe('predictions — create', () => {
   const base = {
     matchLabel: 'Nantes - Metz', selection: '1',
-    odds: 1.80, confidence: 3,
-    createdAt: new Date().toISOString(),
+    odds: 1.80, confidence: 3, createdAt: new Date().toISOString(),
   };
 
   it('propriétaire crée avec son propre authorUid', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
     await assertSucceeds(
-      setDoc(doc(db, 'predictions', 'new1'), { ...base, authorUid: ALICE_UID })
+      setDoc(doc(aliceDb, 'predictions', 'new1'), { ...base, authorUid: ALICE_UID })
     );
   });
 
   it('refusé si authorUid est null', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
     await assertFails(
-      setDoc(doc(db, 'predictions', 'new2'), { ...base, authorUid: null })
+      setDoc(doc(aliceDb, 'predictions', 'new2'), { ...base, authorUid: null })
     );
   });
 
   it('refusé si authorUid appartient à un autre utilisateur', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
     await assertFails(
-      setDoc(doc(db, 'predictions', 'new3'), { ...base, authorUid: BOB_UID })
+      setDoc(doc(aliceDb, 'predictions', 'new3'), { ...base, authorUid: BOB_UID })
     );
   });
 
   it('refusé si non authentifié', async () => {
-    const db = anon().firestore();
     await assertFails(
-      setDoc(doc(db, 'predictions', 'new4'), { ...base, authorUid: ALICE_UID })
+      setDoc(doc(anonDb, 'predictions', 'new4'), { ...base, authorUid: ALICE_UID })
     );
   });
 });
@@ -202,38 +176,31 @@ describe('predictions — update', () => {
   });
 
   it('propriétaire modifie ses propres champs', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertSucceeds(updateDoc(doc(db, 'predictions', 'pu1'), { confidence: 5 }));
+    await assertSucceeds(updateDoc(doc(aliceDb, 'predictions', 'pu1'), { confidence: 5 }));
   });
 
   it('propriétaire ne peut pas changer authorUid', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertFails(updateDoc(doc(db, 'predictions', 'pu1'), { authorUid: BOB_UID }));
+    await assertFails(updateDoc(doc(aliceDb, 'predictions', 'pu1'), { authorUid: BOB_UID }));
   });
 
   it('admin modifie uniquement result sur le prono d\'un autre', async () => {
-    const db = auth(ADMIN_UID, ADMIN_EMAIL).firestore();
-    await assertSucceeds(updateDoc(doc(db, 'predictions', 'pu1'), { result: 'won' }));
+    await assertSucceeds(updateDoc(doc(adminDb, 'predictions', 'pu1'), { result: 'won' }));
   });
 
   it('admin ne peut pas modifier d\'autres champs sur le prono d\'un autre', async () => {
-    const db = auth(ADMIN_UID, ADMIN_EMAIL).firestore();
-    await assertFails(updateDoc(doc(db, 'predictions', 'pu1'), { confidence: 5 }));
+    await assertFails(updateDoc(doc(adminDb, 'predictions', 'pu1'), { confidence: 5 }));
   });
 
   it('admin modifie un prono legacy (authorUid absent)', async () => {
-    const db = auth(ADMIN_UID, ADMIN_EMAIL).firestore();
-    await assertSucceeds(updateDoc(doc(db, 'predictions', 'plegacy'), { result: 'lost' }));
+    await assertSucceeds(updateDoc(doc(adminDb, 'predictions', 'plegacy'), { result: 'lost' }));
   });
 
   it('tiers ne peut pas modifier le prono d\'un autre', async () => {
-    const db = auth(BOB_UID, BOB_EMAIL).firestore();
-    await assertFails(updateDoc(doc(db, 'predictions', 'pu1'), { result: 'won' }));
+    await assertFails(updateDoc(doc(bobDb, 'predictions', 'pu1'), { result: 'won' }));
   });
 
   it('non authentifié refusé', async () => {
-    const db = anon().firestore();
-    await assertFails(updateDoc(doc(db, 'predictions', 'pu1'), { result: 'won' }));
+    await assertFails(updateDoc(doc(anonDb, 'predictions', 'pu1'), { result: 'won' }));
   });
 });
 
@@ -248,23 +215,19 @@ describe('predictions — delete', () => {
   });
 
   it('propriétaire supprime son propre prono', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertSucceeds(deleteDoc(doc(db, 'predictions', 'pd1')));
+    await assertSucceeds(deleteDoc(doc(aliceDb, 'predictions', 'pd1')));
   });
 
   it('tiers ne peut pas supprimer le prono d\'un autre', async () => {
-    const db = auth(CHARLIE_UID, CHARLIE_EMAIL).firestore();
-    await assertFails(deleteDoc(doc(db, 'predictions', 'pd1')));
+    await assertFails(deleteDoc(doc(charlieDb, 'predictions', 'pd1')));
   });
 
   it('admin supprime un prono legacy', async () => {
-    const db = auth(ADMIN_UID, ADMIN_EMAIL).firestore();
-    await assertSucceeds(deleteDoc(doc(db, 'predictions', 'pdlegacy')));
+    await assertSucceeds(deleteDoc(doc(adminDb, 'predictions', 'pdlegacy')));
   });
 
   it('admin ne peut pas supprimer le prono d\'un autre utilisateur', async () => {
-    const db = auth(ADMIN_UID, ADMIN_EMAIL).firestore();
-    await assertFails(deleteDoc(doc(db, 'predictions', 'pd1')));
+    await assertFails(deleteDoc(doc(adminDb, 'predictions', 'pd1')));
   });
 });
 
@@ -273,103 +236,161 @@ describe('predictions — delete', () => {
 // ═════════════════════════════════════════════════════════════════════════════
 describe('users — create profile', () => {
   it('création valide : uid et email cohérents avec le token', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertSucceeds(setDoc(doc(db, 'users', ALICE_UID), {
+    await assertSucceeds(setDoc(doc(aliceDb, 'users', ALICE_UID), {
       uid: ALICE_UID, email: ALICE_EMAIL,
       displayName: 'Alice', createdAt: new Date().toISOString(),
     }));
   });
 
   it('refusé si uid dans le document ≠ uid dans le chemin', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertFails(setDoc(doc(db, 'users', ALICE_UID), {
+    await assertFails(setDoc(doc(aliceDb, 'users', ALICE_UID), {
       uid: BOB_UID, email: ALICE_EMAIL,
       displayName: 'Alice', createdAt: new Date().toISOString(),
     }));
   });
 
   it('refusé si email dans le document ≠ email du token Firebase Auth', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertFails(setDoc(doc(db, 'users', ALICE_UID), {
+    await assertFails(setDoc(doc(aliceDb, 'users', ALICE_UID), {
       uid: ALICE_UID, email: BOB_EMAIL,
       displayName: 'Alice', createdAt: new Date().toISOString(),
     }));
   });
 
   it('refusé si on écrit dans le profil d\'un autre', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertFails(setDoc(doc(db, 'users', BOB_UID), {
+    await assertFails(setDoc(doc(aliceDb, 'users', BOB_UID), {
       uid: BOB_UID, email: BOB_EMAIL, displayName: 'Alice',
     }));
   });
 });
 
 describe('users — update profile', () => {
-  beforeEach(async () => {
-    await createProfile(ALICE_UID, ALICE_EMAIL);
-  });
+  beforeEach(async () => { await createProfile(ALICE_UID, ALICE_EMAIL); });
 
   it('propriétaire modifie son displayName', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertSucceeds(updateDoc(doc(db, 'users', ALICE_UID), {
+    await assertSucceeds(updateDoc(doc(aliceDb, 'users', ALICE_UID), {
       displayName: 'Alice Pro',
     }));
   });
 
   it('propriétaire associe un deviceId au bon format', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertSucceeds(updateDoc(doc(db, 'users', ALICE_UID), {
+    await assertSucceeds(updateDoc(doc(aliceDb, 'users', ALICE_UID), {
       deviceId: 'MatiMatch_AABBCCDDEEFF',
     }));
   });
 
   it('propriétaire dissocie son appareil (deviceId null)', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertSucceeds(updateDoc(doc(db, 'users', ALICE_UID), {
+    await assertSucceeds(updateDoc(doc(aliceDb, 'users', ALICE_UID), {
       deviceId: null,
     }));
   });
 
   it('refusé si deviceId ne respecte pas le format MatiMatch_*', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertFails(updateDoc(doc(db, 'users', ALICE_UID), {
+    await assertFails(updateDoc(doc(aliceDb, 'users', ALICE_UID), {
       deviceId: 'esp32-device-123',
     }));
   });
 
   it('refusé si on tente de changer l\'email', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertFails(updateDoc(doc(db, 'users', ALICE_UID), {
+    await assertFails(updateDoc(doc(aliceDb, 'users', ALICE_UID), {
       email: 'newalice@test.com',
     }));
   });
 
   it('refusé si on tente de changer l\'uid', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertFails(updateDoc(doc(db, 'users', ALICE_UID), {
+    await assertFails(updateDoc(doc(aliceDb, 'users', ALICE_UID), {
       uid: BOB_UID,
     }));
   });
 
   it('tiers ne peut pas modifier le profil d\'un autre', async () => {
-    const db = auth(BOB_UID, BOB_EMAIL).firestore();
-    await assertFails(updateDoc(doc(db, 'users', ALICE_UID), {
+    await assertFails(updateDoc(doc(bobDb, 'users', ALICE_UID), {
       displayName: 'Hacker',
     }));
   });
 });
 
 describe('users — read profile', () => {
-  before(async () => { await createProfile(ALICE_UID, ALICE_EMAIL); });
+  beforeEach(async () => { await createProfile(ALICE_UID, ALICE_EMAIL); });
 
   it('tout utilisateur authentifié peut lire un profil (findByEmail)', async () => {
-    const db = auth(BOB_UID, BOB_EMAIL).firestore();
-    await assertSucceeds(getDoc(doc(db, 'users', ALICE_UID)));
+    await assertSucceeds(getDoc(doc(bobDb, 'users', ALICE_UID)));
   });
 
   it('non authentifié ne peut pas lire un profil', async () => {
-    const db = anon().firestore();
-    await assertFails(getDoc(doc(db, 'users', ALICE_UID)));
+    await assertFails(getDoc(doc(anonDb, 'users', ALICE_UID)));
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// users/friendRequests — DEMANDES D'AMITIÉ
+// ═════════════════════════════════════════════════════════════════════════════
+describe('users/friendRequests — create', () => {
+  it('Alice envoie une demande à Bob', async () => {
+    await assertSucceeds(setDoc(
+      doc(aliceDb, 'users', BOB_UID, 'friendRequests', ALICE_UID),
+      { fromUid: ALICE_UID, fromName: 'Alice', fromEmail: ALICE_EMAIL,
+        status: 'pending', createdAt: new Date().toISOString() }
+    ));
+  });
+
+  it('refusé si fromUid ≠ auth.uid (usurpation)', async () => {
+    await assertFails(setDoc(
+      doc(aliceDb, 'users', BOB_UID, 'friendRequests', ALICE_UID),
+      { fromUid: BOB_UID, fromName: 'Alice', fromEmail: ALICE_EMAIL,
+        status: 'pending', createdAt: new Date().toISOString() }
+    ));
+  });
+
+  it('refusé si status ≠ pending', async () => {
+    await assertFails(setDoc(
+      doc(aliceDb, 'users', BOB_UID, 'friendRequests', ALICE_UID),
+      { fromUid: ALICE_UID, fromName: 'Alice', fromEmail: ALICE_EMAIL,
+        status: 'accepted', createdAt: new Date().toISOString() }
+    ));
+  });
+
+  it('refusé si non authentifié', async () => {
+    await assertFails(setDoc(
+      doc(anonDb, 'users', BOB_UID, 'friendRequests', ALICE_UID),
+      { fromUid: ALICE_UID, fromName: 'Alice', fromEmail: ALICE_EMAIL,
+        status: 'pending', createdAt: new Date().toISOString() }
+    ));
+  });
+});
+
+describe('users/friendRequests — lecture et suppression', () => {
+  beforeEach(async () => {
+    await createFriendRequest(ALICE_UID, 'Alice', ALICE_EMAIL, BOB_UID);
+  });
+
+  it('destinataire (Bob) lit ses demandes entrantes', async () => {
+    await assertSucceeds(getDoc(
+      doc(bobDb, 'users', BOB_UID, 'friendRequests', ALICE_UID)
+    ));
+  });
+
+  it('tiers ne peut pas lire les demandes d\'un autre', async () => {
+    await assertFails(getDoc(
+      doc(charlieDb, 'users', BOB_UID, 'friendRequests', ALICE_UID)
+    ));
+  });
+
+  it('destinataire (Bob) refuse la demande', async () => {
+    await assertSucceeds(deleteDoc(
+      doc(bobDb, 'users', BOB_UID, 'friendRequests', ALICE_UID)
+    ));
+  });
+
+  it('expéditeur (Alice) annule sa demande', async () => {
+    await assertSucceeds(deleteDoc(
+      doc(aliceDb, 'users', BOB_UID, 'friendRequests', ALICE_UID)
+    ));
+  });
+
+  it('tiers ne peut pas supprimer la demande d\'un autre', async () => {
+    await assertFails(deleteDoc(
+      doc(charlieDb, 'users', BOB_UID, 'friendRequests', ALICE_UID)
+    ));
   });
 });
 
@@ -378,61 +399,60 @@ describe('users — read profile', () => {
 // ═════════════════════════════════════════════════════════════════════════════
 describe('users/friends — écriture', () => {
   it('propriétaire ajoute un ami dans sa propre liste', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
     await assertSucceeds(setDoc(
-      doc(db, 'users', ALICE_UID, 'friends', BOB_UID),
+      doc(aliceDb, 'users', ALICE_UID, 'friends', BOB_UID),
       { uid: BOB_UID, displayName: 'Bob', email: BOB_EMAIL }
     ));
   });
 
-  it('self-insert : Bob s\'ajoute à la liste d\'Alice (uid du doc == auth.uid)', async () => {
-    const db = auth(BOB_UID, BOB_EMAIL).firestore();
+  it('self-insert accepté après demande préalable d\'Alice', async () => {
+    // Alice a envoyé une demande à Bob → users/BOB/friendRequests/ALICE existe
+    await createFriendRequest(ALICE_UID, 'Alice', ALICE_EMAIL, BOB_UID);
     await assertSucceeds(setDoc(
-      doc(db, 'users', ALICE_UID, 'friends', BOB_UID),
+      doc(bobDb, 'users', ALICE_UID, 'friends', BOB_UID),
+      { uid: BOB_UID, displayName: 'Bob', email: BOB_EMAIL }
+    ));
+  });
+
+  it('self-insert refusé sans demande préalable', async () => {
+    // Pas de friendRequest → Bob ne peut pas s'insérer seul dans la liste d\'Alice
+    await assertFails(setDoc(
+      doc(bobDb, 'users', ALICE_UID, 'friends', BOB_UID),
       { uid: BOB_UID, displayName: 'Bob', email: BOB_EMAIL }
     ));
   });
 
   it('self-insert refusé si uid dans le document ≠ auth.uid (usurpation)', async () => {
-    // Alice essaie d'ajouter Charlie dans la liste de Bob en se faisant passer pour Charlie
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
     await assertFails(setDoc(
-      doc(db, 'users', BOB_UID, 'friends', CHARLIE_UID),
+      doc(aliceDb, 'users', BOB_UID, 'friends', CHARLIE_UID),
       { uid: CHARLIE_UID, displayName: 'Charlie', email: CHARLIE_EMAIL }
     ));
   });
 
   it('tiers ne peut pas écrire dans la liste d\'amis d\'un autre (cas général)', async () => {
-    // Charlie essaie d'écrire dans la liste de Bob, en créant un doc avec uid=Alice
-    const db = auth(CHARLIE_UID, CHARLIE_EMAIL).firestore();
     await assertFails(setDoc(
-      doc(db, 'users', BOB_UID, 'friends', ALICE_UID),
+      doc(charlieDb, 'users', BOB_UID, 'friends', ALICE_UID),
       { uid: ALICE_UID, displayName: 'Alice', email: ALICE_EMAIL }
     ));
   });
 
   it('self-remove : Bob se retire de la liste d\'Alice', async () => {
-    await createFriendship(ALICE_UID, 'Alice', ALICE_EMAIL, BOB_UID, 'Bob', BOB_EMAIL);
-    const db = auth(BOB_UID, BOB_EMAIL).firestore();
+    await createAliceBobFriendship();
     await assertSucceeds(deleteDoc(
-      doc(db, 'users', ALICE_UID, 'friends', BOB_UID)
+      doc(bobDb, 'users', ALICE_UID, 'friends', BOB_UID)
     ));
   });
 });
 
 describe('users/friends — lecture', () => {
-  before(async () => {
-    await createFriendship(ALICE_UID, 'Alice', ALICE_EMAIL, BOB_UID, 'Bob', BOB_EMAIL);
-  });
+  beforeEach(createAliceBobFriendship);
 
   it('propriétaire lit sa liste', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertSucceeds(getDoc(doc(db, 'users', ALICE_UID, 'friends', BOB_UID)));
+    await assertSucceeds(getDoc(doc(aliceDb, 'users', ALICE_UID, 'friends', BOB_UID)));
   });
 
   it('tiers ne peut pas lire la liste d\'amis d\'un autre', async () => {
-    const db = auth(CHARLIE_UID, CHARLIE_EMAIL).firestore();
-    await assertFails(getDoc(doc(db, 'users', ALICE_UID, 'friends', BOB_UID)));
+    await assertFails(getDoc(doc(charlieDb, 'users', ALICE_UID, 'friends', BOB_UID)));
   });
 });
 
@@ -440,19 +460,17 @@ describe('users/friends — lecture', () => {
 // users/received — PRONOSTICS REÇUS
 // ═════════════════════════════════════════════════════════════════════════════
 describe('users/received — lecture', () => {
-  before(async () => {
-    await createFriendship(ALICE_UID, 'Alice', ALICE_EMAIL, BOB_UID, 'Bob', BOB_EMAIL);
+  beforeEach(async () => {
+    await createAliceBobFriendship();
     await createReceived(BOB_UID, 'r1', ALICE_UID);
   });
 
   it('destinataire lit ses pronostics reçus', async () => {
-    const db = auth(BOB_UID, BOB_EMAIL).firestore();
-    await assertSucceeds(getDoc(doc(db, 'users', BOB_UID, 'received', 'r1')));
+    await assertSucceeds(getDoc(doc(bobDb, 'users', BOB_UID, 'received', 'r1')));
   });
 
   it('tiers ne peut pas lire les pronostics reçus d\'un autre', async () => {
-    const db = auth(CHARLIE_UID, CHARLIE_EMAIL).firestore();
-    await assertFails(getDoc(doc(db, 'users', BOB_UID, 'received', 'r1')));
+    await assertFails(getDoc(doc(charlieDb, 'users', BOB_UID, 'received', 'r1')));
   });
 });
 
@@ -464,38 +482,39 @@ describe('users/received — create (partage)', () => {
     createdAt: new Date().toISOString(), mqttStatus: 'pending',
   };
 
-  beforeEach(async () => {
-    await createFriendship(ALICE_UID, 'Alice', ALICE_EMAIL, BOB_UID, 'Bob', BOB_EMAIL);
-  });
+  beforeEach(createAliceBobFriendship);
 
   it('ami partage un pronostic avec un ami', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
     await assertSucceeds(setDoc(
-      doc(db, 'users', BOB_UID, 'received', 'rtest'),
+      doc(aliceDb, 'users', BOB_UID, 'received', 'rtest'),
       sharedPred
     ));
   });
 
-  it('refusé si fromUid ≠ auth.uid (usurpation d\'identité)', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
+  it('refusé si mqttStatus ≠ pending à la création', async () => {
     await assertFails(setDoc(
-      doc(db, 'users', BOB_UID, 'received', 'rusurp'),
+      doc(aliceDb, 'users', BOB_UID, 'received', 'rsentcreate'),
+      { ...sharedPred, mqttStatus: 'sent' }
+    ));
+  });
+
+  it('refusé si fromUid ≠ auth.uid (usurpation d\'identité)', async () => {
+    await assertFails(setDoc(
+      doc(aliceDb, 'users', BOB_UID, 'received', 'rusurp'),
       { ...sharedPred, fromUid: CHARLIE_UID }
     ));
   });
 
   it('refusé si l\'expéditeur n\'est pas ami du destinataire', async () => {
-    const db = auth(CHARLIE_UID, CHARLIE_EMAIL).firestore();
     await assertFails(setDoc(
-      doc(db, 'users', BOB_UID, 'received', 'rnonfriend'),
+      doc(charlieDb, 'users', BOB_UID, 'received', 'rnonfriend'),
       { ...sharedPred, fromUid: CHARLIE_UID, fromName: 'Charlie' }
     ));
   });
 
   it('refusé si non authentifié', async () => {
-    const db = anon().firestore();
     await assertFails(setDoc(
-      doc(db, 'users', BOB_UID, 'received', 'ranon'),
+      doc(anonDb, 'users', BOB_UID, 'received', 'ranon'),
       sharedPred
     ));
   });
@@ -503,55 +522,49 @@ describe('users/received — create (partage)', () => {
 
 describe('users/received — update (mqttStatus uniquement)', () => {
   beforeEach(async () => {
-    await createFriendship(ALICE_UID, 'Alice', ALICE_EMAIL, BOB_UID, 'Bob', BOB_EMAIL);
-    await createReceived(BOB_UID, 'ru1', ALICE_UID, 'pending');
+    await createAliceBobFriendship();
+    await createReceived(BOB_UID, 'ru1',    ALICE_UID, 'pending');
     await createReceived(BOB_UID, 'ru_sent', ALICE_UID, 'sent');
   });
 
   it('expéditeur met à jour mqttStatus pending → sent', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
     await assertSucceeds(updateDoc(
-      doc(db, 'users', BOB_UID, 'received', 'ru1'),
+      doc(aliceDb, 'users', BOB_UID, 'received', 'ru1'),
       { mqttStatus: 'sent' }
     ));
   });
 
   it('refusé si on tente de modifier un autre champ (ex. matchLabel)', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
     await assertFails(updateDoc(
-      doc(db, 'users', BOB_UID, 'received', 'ru1'),
+      doc(aliceDb, 'users', BOB_UID, 'received', 'ru1'),
       { matchLabel: 'Nouveau match' }
     ));
   });
 
   it('refusé si on tente de modifier mqttStatus ET un autre champ simultanément', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
     await assertFails(updateDoc(
-      doc(db, 'users', BOB_UID, 'received', 'ru1'),
+      doc(aliceDb, 'users', BOB_UID, 'received', 'ru1'),
       { mqttStatus: 'sent', odds: 9.99 }
     ));
   });
 
   it('refusé si transition inverse : sent → pending', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
     await assertFails(updateDoc(
-      doc(db, 'users', BOB_UID, 'received', 'ru_sent'),
+      doc(aliceDb, 'users', BOB_UID, 'received', 'ru_sent'),
       { mqttStatus: 'pending' }
     ));
   });
 
   it('tiers ne peut pas mettre à jour received', async () => {
-    const db = auth(CHARLIE_UID, CHARLIE_EMAIL).firestore();
     await assertFails(updateDoc(
-      doc(db, 'users', BOB_UID, 'received', 'ru1'),
+      doc(charlieDb, 'users', BOB_UID, 'received', 'ru1'),
       { mqttStatus: 'sent' }
     ));
   });
 
   it('destinataire ne peut pas modifier ses received', async () => {
-    const db = auth(BOB_UID, BOB_EMAIL).firestore();
     await assertFails(updateDoc(
-      doc(db, 'users', BOB_UID, 'received', 'ru1'),
+      doc(bobDb, 'users', BOB_UID, 'received', 'ru1'),
       { mqttStatus: 'sent' }
     ));
   });
@@ -559,17 +572,15 @@ describe('users/received — update (mqttStatus uniquement)', () => {
 
 describe('users/received — delete interdit', () => {
   beforeEach(async () => {
-    await createFriendship(ALICE_UID, 'Alice', ALICE_EMAIL, BOB_UID, 'Bob', BOB_EMAIL);
+    await createAliceBobFriendship();
     await createReceived(BOB_UID, 'rd1', ALICE_UID);
   });
 
   it('destinataire ne peut pas supprimer ses received', async () => {
-    const db = auth(BOB_UID, BOB_EMAIL).firestore();
-    await assertFails(deleteDoc(doc(db, 'users', BOB_UID, 'received', 'rd1')));
+    await assertFails(deleteDoc(doc(bobDb, 'users', BOB_UID, 'received', 'rd1')));
   });
 
   it('expéditeur ne peut pas supprimer un received', async () => {
-    const db = auth(ALICE_UID, ALICE_EMAIL).firestore();
-    await assertFails(deleteDoc(doc(db, 'users', BOB_UID, 'received', 'rd1')));
+    await assertFails(deleteDoc(doc(aliceDb, 'users', BOB_UID, 'received', 'rd1')));
   });
 });

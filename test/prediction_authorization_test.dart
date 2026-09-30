@@ -19,6 +19,21 @@ import 'package:flutter_test/flutter_test.dart';
 T? _field<T>(Map<String, dynamic> data, String key) =>
     data.containsKey(key) ? data[key] as T? : null;
 
+// ── predictions — read ───────────────────────────────────────────────────────
+/// Miroir de : allow read if request.auth != null
+///             && (field(authorUid) == request.auth.uid || isAdmin())
+bool canReadPrediction({
+  required String? authUid,
+  required String? adminUid,
+  required String? documentAuthorUid,
+}) {
+  if (authUid == null) return false;
+  final isAdmin = adminUid != null && authUid == adminUid;
+  if (documentAuthorUid == authUid) return true;
+  if (isAdmin) return true;
+  return false;
+}
+
 // ── predictions — create ──────────────────────────────────────────────────────
 bool canCreatePrediction({
   required String? authUid,
@@ -108,22 +123,39 @@ bool canUpdateProfile({
   return true;
 }
 
+// ── users/friendRequests — create ────────────────────────────────────────────
+/// [senderUid] : document ID (= auth.uid)
+bool canSendFriendRequest({
+  required String? authUid,
+  required String senderUid,
+  required String? documentFromUid,
+  required String? documentStatus,
+}) {
+  if (authUid == null) return false;
+  if (authUid != senderUid) return false;
+  if (documentFromUid != authUid) return false;
+  if (documentStatus != 'pending') return false;
+  return true;
+}
+
 // ── users/friends — écriture ──────────────────────────────────────────────────
 /// [uid] : propriétaire de la liste
 /// [friendUid] : clé du document dans la liste
 /// [documentUid] : champ 'uid' dans le document à créer
+/// [hasFriendRequest] : users/{auth.uid}/friendRequests/{uid} existe
 bool canAddToFriendList({
   required String? authUid,
   required String uid,
   required String friendUid,
   required String? documentUid,
+  bool hasFriendRequest = false,
 }) {
   if (authUid == null) return false;
   // Règle owner
   if (authUid == uid) return true;
-  // Règle self-insert : l'utilisateur représenté par friendUid s'ajoute
-  // lui-même, et le document contient son propre uid
-  if (authUid == friendUid && documentUid == authUid) return true;
+  // Règle self-insert : friendUid s'insère dans la liste de uid,
+  // uniquement si uid lui a envoyé une demande préalable.
+  if (authUid == friendUid && documentUid == authUid && hasFriendRequest) return true;
   return false;
 }
 
@@ -181,6 +213,30 @@ void main() {
   const bob   = 'uid-bob';
   const admin = 'uid-admin';
   const other = 'uid-other';
+
+  // ── predictions — read ────────────────────────────────────────────────────
+  group('canReadPrediction', () {
+    test('propriétaire lit son propre pronostic', () {
+      expect(canReadPrediction(
+        authUid: alice, adminUid: admin, documentAuthorUid: alice), isTrue);
+    });
+    test('autre utilisateur ne peut pas lire le prono d\'Alice', () {
+      expect(canReadPrediction(
+        authUid: bob, adminUid: admin, documentAuthorUid: alice), isFalse);
+    });
+    test('admin lit n\'importe quel pronostic', () {
+      expect(canReadPrediction(
+        authUid: admin, adminUid: admin, documentAuthorUid: alice), isTrue);
+    });
+    test('admin lit un prono legacy (authorUid null)', () {
+      expect(canReadPrediction(
+        authUid: admin, adminUid: admin, documentAuthorUid: null), isTrue);
+    });
+    test('non authentifié refusé', () {
+      expect(canReadPrediction(
+        authUid: null, adminUid: admin, documentAuthorUid: alice), isFalse);
+    });
+  });
 
   // ── predictions — create ───────────────────────────────────────────────────
   group('canCreatePrediction', () {
@@ -325,12 +381,20 @@ void main() {
         newDeviceId: null), isTrue);
     });
 
-    test('association d\'un deviceId au bon format', () {
+    test('association d\'un deviceId au bon format (hex majuscule)', () {
       expect(canUpdateProfile(
         authUid: alice, pathUid: alice,
         existingUid: alice, newUid: alice,
         existingEmail: 'alice@t.com', newEmail: 'alice@t.com',
         newDeviceId: 'MatiMatch_AABBCCDDEEFF'), isTrue);
+    });
+
+    test('association d\'un deviceId mixte chiffres/hex (MatiMatch_240AC4000110)', () {
+      expect(canUpdateProfile(
+        authUid: alice, pathUid: alice,
+        existingUid: alice, newUid: alice,
+        existingEmail: 'alice@t.com', newEmail: 'alice@t.com',
+        newDeviceId: 'MatiMatch_240AC4000110'), isTrue);
     });
 
     test('dissociation de l\'appareil (deviceId null)', () {
@@ -374,6 +438,33 @@ void main() {
     });
   });
 
+  // ── users/friendRequests — create ─────────────────────────────────────────
+  group('canSendFriendRequest', () {
+    test('envoi valide : senderUid == auth.uid, fromUid == auth.uid, status pending', () {
+      expect(canSendFriendRequest(
+        authUid: alice, senderUid: alice,
+        documentFromUid: alice, documentStatus: 'pending'), isTrue);
+    });
+
+    test('refusé si fromUid ≠ auth.uid (usurpation)', () {
+      expect(canSendFriendRequest(
+        authUid: alice, senderUid: alice,
+        documentFromUid: bob, documentStatus: 'pending'), isFalse);
+    });
+
+    test('refusé si status ≠ pending', () {
+      expect(canSendFriendRequest(
+        authUid: alice, senderUid: alice,
+        documentFromUid: alice, documentStatus: 'accepted'), isFalse);
+    });
+
+    test('refusé si non authentifié', () {
+      expect(canSendFriendRequest(
+        authUid: null, senderUid: alice,
+        documentFromUid: alice, documentStatus: 'pending'), isFalse);
+    });
+  });
+
   // ── users/friends — écriture ───────────────────────────────────────────────
   group('canAddToFriendList', () {
     test('propriétaire ajoute un ami dans sa liste', () {
@@ -381,20 +472,28 @@ void main() {
         authUid: alice, uid: alice, friendUid: bob, documentUid: bob), isTrue);
     });
 
-    test('self-insert : Bob s\'ajoute à la liste d\'Alice avec son propre uid', () {
+    test('self-insert accepté si demande préalable existe', () {
       expect(canAddToFriendList(
-        authUid: bob, uid: alice, friendUid: bob, documentUid: bob), isTrue);
+        authUid: bob, uid: alice, friendUid: bob, documentUid: bob,
+        hasFriendRequest: true), isTrue);
+    });
+
+    test('self-insert refusé sans demande préalable', () {
+      expect(canAddToFriendList(
+        authUid: bob, uid: alice, friendUid: bob, documentUid: bob,
+        hasFriendRequest: false), isFalse);
     });
 
     test('self-insert refusé si documentUid ≠ auth.uid (usurpation)', () {
-      // Alice essaie d'insérer Charlie dans la liste de Bob
       expect(canAddToFriendList(
-        authUid: alice, uid: bob, friendUid: other, documentUid: other), isFalse);
+        authUid: alice, uid: bob, friendUid: other, documentUid: other,
+        hasFriendRequest: true), isFalse);
     });
 
     test('tiers ne peut pas écrire dans la liste d\'un autre', () {
       expect(canAddToFriendList(
-        authUid: other, uid: alice, friendUid: bob, documentUid: bob), isFalse);
+        authUid: other, uid: alice, friendUid: bob, documentUid: bob,
+        hasFriendRequest: true), isFalse);
     });
   });
 
@@ -439,6 +538,46 @@ void main() {
       expect(canSharePrediction(
         senderUid: null, documentFromUid: alice,
         senderIsFriendOfRecipient: true), isFalse);
+    });
+
+    test('refusé si fromUid est vide (authorUid null côté Flutter)', () {
+      // Reproduit le bug : Prediction créée sans authorUid → fromUid: ''
+      // → règle "fromUid == request.auth.uid" échoue même si l'amitié existe.
+      expect(canSharePrediction(
+        senderUid: alice, documentFromUid: '',
+        senderIsFriendOfRecipient: true), isFalse);
+    });
+  });
+
+  // ── régression : stale uid dans PredictionsNotifier (compte principal) ────
+  // Cause : build() lisait AuthService.currentUser sans ref.watch(authStateProvider).
+  // Après une déconnexion, le stream Firestore lançait permission-denied.
+  // Lors de la reconnexion, build() ne se réexécutait pas → état d'erreur persistant.
+  group('régression — provider non réactif (stale uid après changement de compte)', () {
+    test('query avec uid périmé refusée même si l\'utilisateur est maintenant authentifié', () {
+      // Simule : stream lancé avec bob (ancien compte), auth.uid == alice (nouveau compte).
+      expect(canReadPrediction(
+        authUid: alice,
+        adminUid: admin,
+        documentAuthorUid: bob,
+      ), isFalse);
+    });
+
+    test('après rebuild avec le bon uid, lecture autorisée', () {
+      // Fix : ref.watch(authStateProvider) → rebuild → stream avec alice.
+      expect(canReadPrediction(
+        authUid: alice,
+        adminUid: admin,
+        documentAuthorUid: alice,
+      ), isTrue);
+    });
+
+    test('admin : lecture autorisée avec son propre uid (non-legacy)', () {
+      expect(canReadPrediction(
+        authUid: admin,
+        adminUid: admin,
+        documentAuthorUid: admin,
+      ), isTrue);
     });
   });
 

@@ -113,8 +113,9 @@ class _AddPredictionScreenState extends ConsumerState<AddPredictionScreen> {
       kickoffUtc:  widget.kickoffUtc,
     );
 
+    late final Prediction savedPrediction;
     try {
-      await ref.read(predictionsProvider.notifier).add(prediction);
+      savedPrediction = await ref.read(predictionsProvider.notifier).add(prediction);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -131,7 +132,7 @@ class _AddPredictionScreenState extends ConsumerState<AddPredictionScreen> {
     if (!mounted) return;
 
     // Propose de partager avec des amis avant de quitter.
-    await _showShareDialog(prediction);
+    await _showShareDialog(savedPrediction);
 
     if (mounted) {
       ref.read(selectedTabProvider.notifier).state = 0;
@@ -196,19 +197,31 @@ class _AddPredictionScreenState extends ConsumerState<AddPredictionScreen> {
                               .where((f) => selected[f.uid] == true)
                               .toList();
                           final mqtt = ref.read(mqttRepositoryProvider);
-                          await SocialService.sharePrediction(
-                            prediction: prediction,
-                            senderName: senderName,
-                            recipients: recipients,
-                            mqtt: mqtt,
-                          );
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                    'Partagé avec ${recipients.length} ami(s) !'),
-                              ),
+                          try {
+                            await SocialService.sharePrediction(
+                              prediction: prediction,
+                              senderName: senderName,
+                              recipients: recipients,
+                              mqtt: mqtt,
                             );
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                      'Partagé avec ${recipients.length} ami(s) !'),
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Erreur de partage : $e'),
+                                  backgroundColor: const Color(0xFFDC2626),
+                                  duration: const Duration(seconds: 8),
+                                ),
+                              );
+                            }
                           }
                         }
                       : null,
@@ -236,6 +249,9 @@ class _AddPredictionScreenState extends ConsumerState<AddPredictionScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // Pré-charge le stream d'amis pendant que l'utilisateur remplit le formulaire,
+    // afin que ref.read(friendsProvider).valueOrNull soit non-null à l'ouverture du dialogue.
+    ref.watch(friendsProvider);
     final warning = _kickoffWarning;
 
     return Scaffold(

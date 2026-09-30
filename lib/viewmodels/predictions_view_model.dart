@@ -4,6 +4,7 @@ import '../models/prediction.dart';
 import '../services/firestore_service.dart';
 import '../services/auth_service.dart';
 import '../services/football_api_service.dart';
+import 'auth_view_model.dart';
 import 'mqtt_provider.dart';
 
 final predictionsProvider =
@@ -22,8 +23,14 @@ final predictedMatchLabelsProvider = Provider<Set<String>>((ref) {
 class PredictionsNotifier extends AsyncNotifier<List<Prediction>> {
   @override
   Future<List<Prediction>> build() async {
-    // Écoute temps réel Firestore
-    final sub = FirestoreService.predictionsStream().listen(
+    // Watch authStateProvider so this rebuilds (and restarts the stream) on
+    // every sign-in/sign-out. Without this, the Firestore stream keeps running
+    // with the previous uid after a sign-out → permission-denied on reload.
+    final uid = ref.watch(authStateProvider).valueOrNull?.uid;
+    if (uid == null) return [];
+
+    // Écoute temps réel Firestore — filtrée sur les pronos du compte connecté.
+    final sub = FirestoreService.predictionsStream(uid).listen(
       (preds) {
         debugPrint('[FIRESTORE] Stream : ${preds.length} pronostic(s) reçu(s)');
         state = AsyncData(preds);
@@ -38,18 +45,17 @@ class PredictionsNotifier extends AsyncNotifier<List<Prediction>> {
 
     // Chargement initial
     try {
-      final list = await FirestoreService.getPredictions();
+      final list = await FirestoreService.getPredictions(uid);
       debugPrint('[FIRESTORE] Chargement initial : ${list.length} pronostic(s)');
       return list;
     } catch (e, st) {
       debugPrint('[FIRESTORE ERROR] Chargement initial : $e');
       debugPrint('[FIRESTORE ERROR] $st');
-      // On laisse la liste vide mais on ne masque pas l'erreur dans les logs
       return [];
     }
   }
 
-  Future<void> add(Prediction prediction) async {
+  Future<Prediction> add(Prediction prediction) async {
     final user = AuthService.currentUser;
     debugPrint('[FIREBASE] Utilisateur connecté : ${user?.uid} (${user?.email})');
 
@@ -77,6 +83,7 @@ class PredictionsNotifier extends AsyncNotifier<List<Prediction>> {
       mqttRepo.sendPrediction(withAuthor);
     }
     // (state mis à jour automatiquement par le stream Firestore)
+    return withAuthor;
   }
 
   Future<void> remove(String id) async {
@@ -91,11 +98,13 @@ class PredictionsNotifier extends AsyncNotifier<List<Prediction>> {
   Future<int> autoCheckResults() async {
     final current = state.valueOrNull ?? [];
     final now = DateTime.now().toUtc();
+    final user = AuthService.currentUser;
     final toCheck = current
         .where((p) =>
             p.result == null &&
             p.fixtureId != null &&
             p.kickoffUtc != null &&
+            p.authorUid == user?.uid &&
             now.difference(p.kickoffUtc!).inMinutes >= 90)
         .toList();
 

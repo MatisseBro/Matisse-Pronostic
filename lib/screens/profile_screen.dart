@@ -258,8 +258,8 @@ Future<void> _editDisplayName(
     ),
   );
   final name = ctrl.text.trim();
-  ctrl.dispose();
   if (confirmed == true) {
+    if (!context.mounted) return;
     final uid = ref.read(authStateProvider).valueOrNull?.uid;
     if (uid == null) return;
     await UserService.updateDisplayName(uid, name);
@@ -312,8 +312,8 @@ Future<void> _editDeviceId(
     ),
   );
   final deviceText = ctrl.text.trim();
-  ctrl.dispose();
   if (confirmed == null) return; // Annuler
+  if (!context.mounted) return;
   final uid = ref.read(authStateProvider).valueOrNull?.uid;
   if (uid == null) return;
   if (confirmed == true) {

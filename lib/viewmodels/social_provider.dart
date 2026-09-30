@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../models/friend_request.dart';
 import '../models/shared_prediction.dart';
 import '../models/user_profile.dart';
 import '../services/social_service.dart';
@@ -17,6 +18,13 @@ final friendsProvider = StreamProvider<List<UserProfile>>((ref) {
   final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) return const Stream.empty();
   return SocialService.friendsStream(user.uid);
+});
+
+/// Demandes d'amitié reçues par l'utilisateur connecté.
+final friendRequestsProvider = StreamProvider<List<FriendRequest>>((ref) {
+  final user = ref.watch(authStateProvider).valueOrNull;
+  if (user == null) return const Stream.empty();
+  return SocialService.friendRequestsStream(user.uid);
 });
 
 /// Pronostics reçus par l'utilisateur connecté.

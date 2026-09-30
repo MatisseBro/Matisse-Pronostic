@@ -53,3 +53,6 @@ esp32/.pio/
 esp32/.vscode/
 include/credentials.h
 esp32/include/credentials.h
+
+# Node.js — dépendances Firebase Emulator (test/emulator/)
+**/node_modules/

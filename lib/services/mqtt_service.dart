@@ -59,13 +59,21 @@ class MqttService {
 
   void publish(String topic, String payload, {bool retain = false}) {
     if (!isConnected) return;
-    final builder = MqttClientPayloadBuilder()..addString(payload);
-    _client!.publishMessage(
-      topic,
-      MqttQos.atLeastOnce,
-      builder.payload!,
-      retain: retain,
-    );
+    try {
+      final builder = MqttClientPayloadBuilder()..addString(payload);
+      _client!.publishMessage(
+        topic,
+        MqttQos.atLeastOnce,
+        builder.payload!,
+        retain: retain,
+      );
+    } catch (e) {
+      // Le client mqtt peut lever une ConnectionException si son état interne
+      // est 'connecting' alors que notre flag _state vient juste de passer
+      // à 'connected' (fenêtre de course avec autoReconnect).
+      // On ignore silencieusement — Firestore n'est pas impacté.
+      debugPrint('[MQTT] publish ignoré (état transitoire) : $e');
+    }
   }
 
   Stream<List<MqttReceivedMessage<MqttMessage?>>>? get updates => _client?.updates;

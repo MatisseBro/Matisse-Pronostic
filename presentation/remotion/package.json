@@ -1,0 +1,24 @@
+{
+  "name": "remotion",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "studio": "npx remotion studio src/Root.tsx",
+    "render": "npx remotion render src/Root.tsx MatiMatchAd ../matimatch_ad.mp4 --codec=h264 --fps=30 --concurrency=4"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@remotion/cli": "^4.0.536",
+    "@remotion/player": "^4.0.536",
+    "@remotion/renderer": "^4.0.536",
+    "ffmpeg-static": "^5.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "remotion": "^4.0.536",
+    "typescript": "^7.0.2"
+  }
+}

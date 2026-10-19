@@ -56,3 +56,9 @@ esp32/include/credentials.h
 
 # Node.js — dépendances Firebase Emulator (test/emulator/)
 **/node_modules/
+
+# Remotion — vidéo source brute, frames d'analyse et cache (trop lourds)
+presentation/untitled.webm
+presentation/frames/
+presentation/frames_detail/
+presentation/remotion/.cache/

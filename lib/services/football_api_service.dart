@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -7,13 +8,39 @@ import '../models/standing_entry.dart';
 
 class FootballApiService {
   static const String _baseUrl = 'https://api.5dollarfootballapi.com/v1';
+  static const String _connectivityCheckUrl =
+      'https://clients3.google.com/generate_204';
 
   static String get _apiKey => dotenv.env['API_FOOTBALL_KEY'] ?? '';
 
   static Map<String, String> get headers => {
-    'Authorization': 'Bearer $_apiKey',
-    'Content-Type': 'application/json',
-  };
+        'Authorization': 'Bearer $_apiKey',
+        'Content-Type': 'application/json',
+      };
+
+  // Une SocketException sur le domaine de l'API ne signifie pas forcément que
+  // l'appareil est hors ligne : le serveur peut être indisponible ou filtré.
+  // On ne montre "Pas de connexion Internet" que si un second hôte connu est
+  // lui aussi inaccessible.
+  static Future<bool> _hasInternetAccess() async {
+    try {
+      await http
+          .get(Uri.parse(_connectivityCheckUrl))
+          .timeout(const Duration(seconds: 4));
+      // Toute réponse HTTP prouve que la pile réseau et Internet fonctionnent,
+      // même si le serveur de contrôle répond avec un code d'erreur.
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<Never> _throwNetworkError() async {
+    if (await _hasInternetAccess()) {
+      throw const ApiUnavailableException();
+    }
+    throw NoInternetException();
+  }
 
   static const List<String> leagueOrder = [
     'Ligue 1',
@@ -25,20 +52,20 @@ class FootballApiService {
 
   // IDs des championnats sur l'API 5dollarfootballapi.com
   static const Map<String, int> leagueIds = {
-    'Ligue 1':        3614399544,
+    'Ligue 1': 3614399544,
     'Premier League': 4160026622,
-    'Liga':           4212821298,
-    'Serie A':        3405541143,
-    'Bundesliga':      686337048,
+    'Liga': 4212821298,
+    'Serie A': 3405541143,
+    'Bundesliga': 686337048,
   };
 
   static String? _mapLeagueName(String name, String? country) {
     final n = name.toLowerCase();
-    if (n.contains('ligue 1'))        return 'Ligue 1';
+    if (n.contains('ligue 1')) return 'Ligue 1';
     if (n.contains('premier league')) return 'Premier League';
     if (n.contains('la liga') || n.contains('primera')) return 'Liga';
-    if (n.contains('serie a'))        return 'Serie A';
-    if (n.contains('bundesliga'))     return 'Bundesliga';
+    if (n.contains('serie a')) return 'Serie A';
+    if (n.contains('bundesliga')) return 'Bundesliga';
     return null;
   }
 
@@ -53,16 +80,16 @@ class FootballApiService {
       );
       if (response.statusCode != 200) return none;
 
-      final body      = jsonDecode(response.body) as Map<String, dynamic>;
-      final data      = body['data'] as Map<String, dynamic>?;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final data = body['data'] as Map<String, dynamic>?;
       if (data == null) return none;
 
       final bookmakers = data['bookmakers'] as List?;
       if (bookmakers == null || bookmakers.isEmpty) return none;
 
-      final bm      = bookmakers.first as Map<String, dynamic>;
+      final bm = bookmakers.first as Map<String, dynamic>;
       final oddsMap = bm['odds'] as Map<String, dynamic>?;
-      final x12     = oddsMap?['1x2'] as Map<String, dynamic>?;
+      final x12 = oddsMap?['1x2'] as Map<String, dynamic>?;
       if (x12 == null) return none;
 
       final closing = x12['closing'] as Map<String, dynamic>?;
@@ -82,13 +109,13 @@ class FootballApiService {
     DateTime date,
   ) async {
     final start = DateTime(date.year, date.month, date.day).toUtc();
-    final end   = DateTime(date.year, date.month, date.day, 23, 59, 59).toUtc();
+    final end = DateTime(date.year, date.month, date.day, 23, 59, 59).toUtc();
 
     final uri = Uri.parse('$_baseUrl/fixtures').replace(
       queryParameters: {
         'start_time': (start.millisecondsSinceEpoch ~/ 1000).toString(),
-        'end_time':   (end.millisecondsSinceEpoch   ~/ 1000).toString(),
-        'per_page':   '200',
+        'end_time': (end.millisecondsSinceEpoch ~/ 1000).toString(),
+        'per_page': '200',
       },
     );
 
@@ -98,25 +125,26 @@ class FootballApiService {
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 429) {
-        final retryAfter = int.tryParse(response.headers['retry-after'] ?? '') ?? 60;
+        final retryAfter =
+            int.tryParse(response.headers['retry-after'] ?? '') ?? 60;
         throw RateLimitException(retryAfter);
       }
       if (response.statusCode != 200) {
         throw ApiException('Erreur serveur (${response.statusCode}).');
       }
 
-      final data     = jsonDecode(response.body);
+      final data = jsonDecode(response.body);
       final fixtures = data is List ? data : (data['data'] as List? ?? []);
 
       final toProcess = <({Map<String, dynamic> json, String displayName})>[];
       for (final f in fixtures) {
-        final json       = f as Map<String, dynamic>;
+        final json = f as Map<String, dynamic>;
         final leagueJson = json['league'] as Map<String, dynamic>?;
         if (leagueJson == null) continue;
 
-        final leagueName  = leagueJson['name'] as String? ?? '';
-        final countryName =
-            (leagueJson['country'] as Map<String, dynamic>?)?['name'] as String?;
+        final leagueName = leagueJson['name'] as String? ?? '';
+        final countryName = (leagueJson['country']
+            as Map<String, dynamic>?)?['name'] as String?;
         final displayName = _mapLeagueName(leagueName, countryName);
         if (displayName == null) continue;
 
@@ -148,7 +176,13 @@ class FootballApiService {
       result.removeWhere((_, matches) => matches.isEmpty);
       return result;
     } on SocketException {
-      throw NoInternetException();
+      await _throwNetworkError();
+    } on HandshakeException {
+      await _throwNetworkError();
+    } on http.ClientException {
+      await _throwNetworkError();
+    } on TimeoutException {
+      await _throwNetworkError();
     }
   }
 
@@ -197,21 +231,32 @@ class FootballApiService {
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 429) {
-        final retryAfter = int.tryParse(response.headers['retry-after'] ?? '') ?? 60;
+        final retryAfter =
+            int.tryParse(response.headers['retry-after'] ?? '') ?? 60;
         throw RateLimitException(retryAfter);
       }
       if (response.statusCode != 200) {
         final err = jsonDecode(response.body);
-        final msg = (err['error']?['message'] as String?) ?? 'Erreur ${response.statusCode}';
+        final msg = (err['error']?['message'] as String?) ??
+            'Erreur ${response.statusCode}';
         throw ApiException(msg);
       }
 
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       final data = body['data'] as Map<String, dynamic>?;
       final table = data?['table'] as List? ?? [];
-      return table.cast<Map<String, dynamic>>().map(StandingEntry.fromJson).toList();
+      return table
+          .cast<Map<String, dynamic>>()
+          .map(StandingEntry.fromJson)
+          .toList();
     } on SocketException {
-      throw NoInternetException();
+      await _throwNetworkError();
+    } on HandshakeException {
+      await _throwNetworkError();
+    } on http.ClientException {
+      await _throwNetworkError();
+    } on TimeoutException {
+      await _throwNetworkError();
     }
   }
 }
@@ -229,6 +274,14 @@ class RateLimitException implements Exception {
   @override
   String toString() =>
       'Quota API dépassé. Réessayez dans $retryAfterSeconds secondes.';
+}
+
+class ApiUnavailableException implements Exception {
+  const ApiUnavailableException();
+
+  @override
+  String toString() =>
+      'Le service de matchs est inaccessible. Réessayez dans quelques instants.';
 }
 
 class ApiException implements Exception {

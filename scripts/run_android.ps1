@@ -6,7 +6,9 @@ $EMULATOR = "C:\Users\matis\AppData\Local\Android\Sdk\emulator\emulator.exe"
 $AVD_NAME = "Pixel_8_API_35"
 $AVD_INI  = "C:\Users\matis\.android\avd\Pixel_8_API_35.avd\emulator-user.ini"
 $FLUTTER  = "C:\Cours\Master\Mobile\Appli\flutter_sdk\bin\flutter.bat"
-$PROJECT  = "C:\Cours\Master\Mobile\Appli\flutter_application_1"
+# Le script appartient au projet MatiMatch : dériver sa racine évite de lancer
+# par erreur une autre copie du projet présente sur la machine.
+$PROJECT  = Split-Path -Parent $PSScriptRoot
 
 # ── Étape 1 : vérifier si l'émulateur est déjà lancé ──────────────────────────
 Write-Host "Vérification de l'émulateur en cours..."

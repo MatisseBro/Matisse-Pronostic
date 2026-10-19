@@ -4,6 +4,76 @@ Date de l'audit : 19 octobre 2026
 Projet audité : `C:\Users\matis\Documents\PlatformIO\Projects\Matimatch`  
 Référence : PDF « Séance 12 — Sécurité, Observabilité & Industrialisation », 17 pages, lu intégralement avant l'audit.
 
+---
+
+## 0. Implémentation post-audit — état au 19 octobre 2026
+
+Les corrections suivantes ont été appliquées sur la branche `securite-seance12` après l'audit initial :
+
+### Nouveaux fichiers créés
+
+| Fichier | Rôle |
+|---|---|
+| `lib/core/logger/app_logger.dart` | Logger centralisé — logs coupés en Release (`kReleaseMode`), sanitization JSON/Bearer/.env |
+| `lib/core/security/secure_vault_service.dart` | Wrapper `flutter_secure_storage` avec fallback dotenv pour la démo |
+| `.github/workflows/ci.yml` | Pipeline CI : pub get → analyze → test → build APK Debug → vérification absence `.env` |
+
+### Modifications appliquées
+
+| Fichier | Changement |
+|---|---|
+| `pubspec.yaml` | Ajout `flutter_secure_storage: ^9.2.2` |
+| `android/app/build.gradle` | `minSdk 21 → 23` (requis par flutter_secure_storage) |
+| `android/app/src/main/AndroidManifest.xml` | `usesCleartextTraffic="true" → "false"` |
+| `lib/services/mqtt_service.dart` | `debugPrint` → `AppLogger`, lecture credentials via `SecureVaultService` |
+| `lib/repositories/mqtt_repository.dart` | `debugPrint` → `AppLogger.d()`, payloads non loggés |
+| `lib/services/firestore_service.dart` | `debugPrint` → `AppLogger`, `response.body` supprimé des logs |
+| `lib/services/social_service.dart` | `debugPrint` → `AppLogger`, UIDs/deviceIds non loggés verbatim |
+| `lib/services/user_service.dart` | `debugPrint` → `AppLogger`, UID non loggé |
+| `lib/viewmodels/predictions_view_model.dart` | `debugPrint` → `AppLogger`, UID/email non loggés |
+| `lib/main.dart` | `debugPrint` → `AppLogger.d()` |
+| `lib/models/football_match.dart` | `print('[LOGO DEBUG]')` supprimé |
+| `firestore.rules` | Champ `result` immuable pour les propriétaires (transition `null → valeur` seulement) |
+| `test/widget_test.dart` | Test compteur template remplacé par 5 tests unitaires `AppLogger.sanitize()` |
+
+### Résultats des commandes de vérification
+
+```
+flutter pub get   → OK (flutter_secure_storage 9.2.4 installé)
+flutter analyze   → No issues found! (63.6s)
+flutter test      → 00:00 +6: All tests passed!
+```
+
+### Statuts mis à jour
+
+| Exigence | Avant | Après |
+|---|---|---|
+| `flutter_secure_storage` | NON CONFORME | **CONFORME** |
+| `SecureVaultService` | NON CONFORME | **CONFORME** |
+| Mot de passe HiveMQ dans le coffre | NON CONFORME | **CONFORME** (fallback dotenv pour démo) |
+| `AppLogger` centralisé | NON CONFORME | **CONFORME** |
+| Aucun `print()` résiduel | NON CONFORME | **CONFORME** |
+| Logs sensibles masqués | NON CONFORME | **CONFORME** |
+| Test JSON masquage `password=***` | NON CONFORME | **CONFORME** (5 tests, tous verts) |
+| GitHub Actions | NON CONFORME | **CONFORME** |
+| `flutter analyze` automatique | NON CONFORME | **CONFORME** |
+| `flutter test` automatique | NON CONFORME | **CONFORME** |
+| APK automatique (Debug) | NON CONFORME | **CONFORME** |
+| Test widget template | NON CONFORME | **CONFORME** |
+| Intégrité résultats Firestore | NON CONFORME | **CONFORME** (`result` immuable après définition) |
+| Permissions Android (cleartext) | PARTIEL | **CONFORME** (`usesCleartextTraffic=false`) |
+| `minSdk` pour coffre-fort | NON CONFORME | **CONFORME** (minSdk=23) |
+
+### Points délibérément non modifiés (risque démo)
+
+| Point | Raison |
+|---|---|
+| ESP32 `setInsecure()` | Modification risque de casser la connexion Wokwi |
+| `.env` conservé en asset | Fallback de sécurité pour la démo (SecureVaultService lit d'abord le coffre) |
+| Règles Firestore non déployées | Production non touchée sans accord explicite |
+
+---
+
 > Cet audit porte uniquement sur le projet **Matimatch**. L'ancien projet `flutter_application_1` n'a pas été recherché ni audité. Le nom technique `flutter_application_1` encore présent dans `pubspec.yaml` et dans l'identifiant Android appartient au projet Matimatch actuel : c'est un reliquat de nommage, pas le dossier de l'ancien projet.
 
 ## 1. Cadre et méthode

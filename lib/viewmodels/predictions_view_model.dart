@@ -1,5 +1,5 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../core/logger/app_logger.dart';
 import '../models/prediction.dart';
 import '../services/firestore_service.dart';
 import '../services/auth_service.dart';
@@ -12,7 +12,6 @@ final predictionsProvider =
   PredictionsNotifier.new,
 );
 
-/// Set des matchLabel pour lesquels un pronostic existe — O(1) lookup dans les cartes
 final predictedMatchLabelsProvider = Provider<Set<String>>((ref) {
   return ref.watch(predictionsProvider).maybeWhen(
     data: (list) => list.map((p) => p.matchLabel).toSet(),
@@ -21,43 +20,38 @@ final predictedMatchLabelsProvider = Provider<Set<String>>((ref) {
 });
 
 class PredictionsNotifier extends AsyncNotifier<List<Prediction>> {
+  static const _tag = 'FIRESTORE';
+
   @override
   Future<List<Prediction>> build() async {
-    // Watch authStateProvider so this rebuilds (and restarts the stream) on
-    // every sign-in/sign-out. Without this, the Firestore stream keeps running
-    // with the previous uid after a sign-out → permission-denied on reload.
     final uid = ref.watch(authStateProvider).valueOrNull?.uid;
     if (uid == null) return [];
 
-    // Écoute temps réel Firestore — filtrée sur les pronos du compte connecté.
     final sub = FirestoreService.predictionsStream(uid).listen(
       (preds) {
-        debugPrint('[FIRESTORE] Stream : ${preds.length} pronostic(s) reçu(s)');
+        AppLogger.d(_tag, 'Stream: ${preds.length} pronostic(s)');
         state = AsyncData(preds);
       },
       onError: (e, st) {
-        debugPrint('[FIRESTORE ERROR] Stream : $e');
-        debugPrint('[FIRESTORE ERROR] $st');
-        state = AsyncError(e, st);
+        AppLogger.e(_tag, 'Stream error', e);
+        state = AsyncError(e, st as StackTrace);
       },
     );
     ref.onDispose(sub.cancel);
 
-    // Chargement initial
     try {
       final list = await FirestoreService.getPredictions(uid);
-      debugPrint('[FIRESTORE] Chargement initial : ${list.length} pronostic(s)');
+      AppLogger.d(_tag, 'Chargement initial: ${list.length} pronostic(s)');
       return list;
     } catch (e, st) {
-      debugPrint('[FIRESTORE ERROR] Chargement initial : $e');
-      debugPrint('[FIRESTORE ERROR] $st');
-      return [];
+      AppLogger.e(_tag, 'Chargement initial error', e);
+      Error.throwWithStackTrace(e, st);
     }
   }
 
   Future<Prediction> add(Prediction prediction) async {
     final user = AuthService.currentUser;
-    debugPrint('[FIREBASE] Utilisateur connecté : ${user?.uid} (${user?.email})');
+    AppLogger.d(_tag, 'Ajout pronostic pour utilisateur connecté');
 
     final withAuthor = Prediction(
       id: prediction.id,
@@ -74,15 +68,12 @@ class PredictionsNotifier extends AsyncNotifier<List<Prediction>> {
       authorUid: user?.uid,
     );
 
-    // 1. Enregistrement Firestore — toute erreur remonte sans être masquée
     await FirestoreService.savePrediction(withAuthor);
 
-    // 2. Publication MQTT directe vers l'ESP32
     final mqttRepo = ref.read(mqttRepositoryProvider);
     if (mqttRepo.isConnected) {
       mqttRepo.sendPrediction(withAuthor);
     }
-    // (state mis à jour automatiquement par le stream Firestore)
     return withAuthor;
   }
 
@@ -94,7 +85,6 @@ class PredictionsNotifier extends AsyncNotifier<List<Prediction>> {
     await FirestoreService.updateResult(id, result);
   }
 
-  // Vérifie automatiquement les résultats via l'API Football.
   Future<int> autoCheckResults() async {
     final current = state.valueOrNull ?? [];
     final now = DateTime.now().toUtc();

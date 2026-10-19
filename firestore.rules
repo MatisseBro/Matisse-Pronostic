@@ -38,7 +38,9 @@ service cloud.firestore {
       //   Règle (1) — authorUid IMMUABLE : la valeur ne peut jamais changer.
       //               Utilise field() pour gérer l'absence totale du champ (legacy).
       //   Règle (2) — au moins une condition d'accès doit être vraie :
-      //     (a) Propriétaire — peut modifier tous ses champs (sauf authorUid).
+      //     (a) Propriétaire — peut modifier ses champs SAUF result une fois défini.
+      //         result est immuable après sa première affectation (null → valeur).
+      //         Empêche la falsification des statistiques a posteriori.
       //     (b) Admin — peut modifier UNIQUEMENT 'result' sur n'importe quel prono.
       //     (c) Admin — peut tout modifier sur les pronos legacy (authorUid absent/null).
       allow update: if request.auth != null
@@ -46,7 +48,13 @@ service cloud.firestore {
           && field(request.resource.data, 'authorUid') == field(resource.data, 'authorUid')
           && (
             // (2a) propriétaire
-            field(resource.data, 'authorUid') == request.auth.uid
+            (field(resource.data, 'authorUid') == request.auth.uid
+             && (
+               // result null → peut être défini (autoCheckResults côté client)
+               field(resource.data, 'result') == null
+               // result déjà défini → immuable (interdit de modifier won↔lost)
+               || field(request.resource.data, 'result') == field(resource.data, 'result')
+             ))
             // (2b) admin → uniquement le champ 'result'
             || (isAdmin()
                 && request.resource.data.diff(resource.data)

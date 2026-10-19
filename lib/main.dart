@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/logger/app_logger.dart';
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
 import 'screens/matches_screen.dart';
@@ -184,19 +185,19 @@ class _HomePageState extends ConsumerState<HomePage> {
 
     repo.stateStream.listen((s) {
       if (!mounted) return;
-      debugPrint('[MQTT] État Flutter: $s');
+      AppLogger.d('MQTT', 'État Flutter: $s');
       ref.read(mqttConnectedProvider.notifier).state =
           s == MqttState.connected;
     });
 
     repo.deviceStatusStream.listen((status) {
       if (!mounted) return;
-      debugPrint('[DEVICE] Statut ESP32 reçu: "$status"');
+      AppLogger.d('DEVICE', 'Statut ESP32: "${status.trim()}"');
       ref.read(deviceStatusProvider.notifier).state = status.trim();
     });
 
     final ok = await repo.connect();
-    debugPrint('[MQTT] connect() → $ok');
+    AppLogger.d('MQTT', 'connect() → $ok');
   }
 
   @override

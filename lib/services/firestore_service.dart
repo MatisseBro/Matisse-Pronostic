@@ -1,10 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import '../core/logger/app_logger.dart';
 import '../models/prediction.dart';
 
 class FirestoreService {
+  static const _tag = 'FIRESTORE';
   static final _db = FirebaseFirestore.instance;
 
   static CollectionReference<Map<String, dynamic>> get _col =>
@@ -12,8 +13,6 @@ class FirestoreService {
 
   static String get projectId => _db.app.options.projectId;
 
-  // Flux temps réel filtré par propriétaire (trié du plus récent au plus ancien).
-  // Le filtre authorUid est cohérent avec la règle allow read du propriétaire.
   static Stream<List<Prediction>> predictionsStream(String uid) {
     return _col
         .where('authorUid', isEqualTo: uid)
@@ -24,7 +23,7 @@ class FirestoreService {
               try {
                 return Prediction.fromJson(doc.data());
               } catch (e) {
-                debugPrint('[FIRESTORE] Parsing error ${doc.id}: $e');
+                AppLogger.e(_tag, 'Parsing error ${doc.id}', e);
                 return null;
               }
             })
@@ -32,7 +31,6 @@ class FirestoreService {
             .toList());
   }
 
-  // Chargement initial filtré par propriétaire.
   static Future<List<Prediction>> getPredictions(String uid) async {
     final snap = await _col
         .where('authorUid', isEqualTo: uid)
@@ -43,7 +41,7 @@ class FirestoreService {
           try {
             return Prediction.fromJson(doc.data());
           } catch (e) {
-            debugPrint('[FIRESTORE] Parsing error ${doc.id}: $e');
+            AppLogger.e(_tag, 'Parsing error ${doc.id}', e);
             return null;
           }
         })
@@ -51,27 +49,18 @@ class FirestoreService {
         .toList();
   }
 
-  /// Enregistre un pronostic et vérifie via l'API REST Firestore que le
-  /// document est bien présent côté serveur. L'appel REST est complètement
-  /// indépendant du SDK Flutter et du cache local (pas de latency-compensation).
   static Future<void> savePrediction(Prediction prediction) async {
     final docRef = _col.doc(prediction.id);
     final data = prediction.toJson();
 
-    // 1. Écriture via transaction (attend la confirmation du serveur avec MemoryCacheSettings)
     await _db.runTransaction((transaction) async {
       transaction.set(docRef, data);
     });
-    debugPrint('[FIRESTORE] Transaction terminée pour ${prediction.id}');
+    AppLogger.d(_tag, 'Transaction terminée pour ${prediction.id}');
 
-    // 2. Vérification REST — bypasse totalement le SDK Flutter et le cache local.
-    //    Source.server est insuffisant car Firestore applique la "latency compensation"
-    //    (les writes locaux en attente sont visibles même avec Source.server).
-    //    Seul un appel HTTP direct prouve que le document est sur le serveur.
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      throw Exception(
-          'Vérification impossible : utilisateur non authentifié.');
+      throw Exception('Vérification impossible : utilisateur non authentifié.');
     }
 
     final idToken = await user.getIdToken(true);
@@ -86,21 +75,17 @@ class FirestoreService {
       headers: {'Authorization': 'Bearer $idToken'},
     );
 
-    debugPrint('[FIRESTORE REST] GET $restUri → ${response.statusCode}');
-    debugPrint('[FIRESTORE REST] Body: ${response.body}');
+    AppLogger.d(_tag, 'REST GET → ${response.statusCode}');
 
     if (response.statusCode == 200) {
-      debugPrint('[FIRESTORE] ✓ Document ${prediction.id} confirmé sur le serveur REST.');
+      AppLogger.d(_tag, '✓ Document ${prediction.id} confirmé côté serveur.');
       return;
     }
 
-    // Erreur côté serveur : on lève une exception explicite avec le détail HTTP
-    // pour qu'elle remonte jusqu'au snackbar rouge de l'écran.
     throw Exception(
       'REST Firestore: document absent du serveur.\n'
       'Projet: $proj\n'
-      'HTTP ${response.statusCode}\n'
-      '${response.body}',
+      'HTTP ${response.statusCode}',
     );
   }
 

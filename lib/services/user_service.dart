@@ -1,14 +1,14 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
+import '../core/logger/app_logger.dart';
 import '../models/user_profile.dart';
 
 class UserService {
+  static const _tag = 'USER';
   static final _db = FirebaseFirestore.instance;
   static CollectionReference<Map<String, dynamic>> get _users =>
       _db.collection('users');
 
-  /// Crée le profil si inexistant. Appelé au premier login.
   static Future<void> ensureProfile(User user) async {
     final doc = await _users.doc(user.uid).get();
     if (doc.exists) return;
@@ -24,7 +24,7 @@ class UserService {
       createdAt: DateTime.now(),
     );
     await _users.doc(user.uid).set(profile.toJson());
-    debugPrint('[USER] Profil créé pour ${user.uid} ($displayName)');
+    AppLogger.d(_tag, 'Profil créé pour $displayName');
   }
 
   static Future<UserProfile?> getProfile(String uid) async {
@@ -46,10 +46,9 @@ class UserService {
 
   static Future<void> updateDeviceId(String uid, String? deviceId) async {
     await _users.doc(uid).update({'deviceId': deviceId});
-    debugPrint('[USER] deviceId mis à jour : $deviceId');
+    AppLogger.d(_tag, 'deviceId mis à jour');
   }
 
-  /// Cherche un utilisateur par adresse email exacte (casse ignorée).
   static Future<UserProfile?> findByEmail(String email) async {
     final query = await _users
         .where('email', isEqualTo: email.trim().toLowerCase())

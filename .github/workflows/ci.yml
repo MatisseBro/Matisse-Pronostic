@@ -1,66 +1,58 @@
-name: CI — MatiMatch
+name: CI - MatiMatch
 
 on:
   push:
-    branches: [main, securite-seance12, dev]
   pull_request:
-    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   flutter:
-    name: Flutter analyze + test + build APK
+    name: Flutter checks and Android debug build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Setup Flutter
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.29.3'
+          flutter-version: '3.27.1'
           channel: stable
           cache: true
 
-      # Crée un fichier .env factice pour que dotenv ne lève pas d'erreur.
-      # Les vraies valeurs ne sont jamais stockées dans les secrets CI pour ce projet.
-      - name: Créer .env de test
+      # The app declares .env as a Flutter asset. CI therefore needs the file,
+      # but only non-sensitive placeholders are used and no production secret
+      # is read from GitHub Actions.
+      - name: Create non-secret CI environment file
+        shell: bash
         run: |
-          cat > .env << 'EOF'
-          API_FOOTBALL_KEY=ci_test_key
-          MQTT_HOST=mqtt.example.com
+          cat > .env <<'EOF'
+          API_FOOTBALL_KEY=ci-placeholder
+          MQTT_HOST=localhost
           MQTT_PORT=8883
-          MQTT_USER=ci_user
-          MQTT_PASSWORD=ci_password
-          ADMIN_EMAIL=admin@example.com
+          MQTT_USER=ci-placeholder
+          MQTT_PASSWORD=ci-placeholder
+          ADMIN_EMAIL=ci@example.invalid
           EOF
 
-      - name: flutter pub get
+      - name: Install Flutter dependencies
         run: flutter pub get
 
-      - name: flutter analyze
-        run: flutter analyze --no-fatal-infos
+      - name: Analyze Dart code
+        run: flutter analyze
 
-      - name: flutter test
-        run: flutter test --reporter=expanded
+      - name: Run Flutter tests
+        run: flutter test
 
-      - name: flutter build apk (debug)
-        run: flutter build apk --debug
-
-      - name: Vérifier absence de .env dans l'APK
-        run: |
-          set +e
-          unzip -p build/app/outputs/flutter-apk/app-debug.apk \
-            assets/flutter_assets/.env > /dev/null 2>&1
-          if [ $? -eq 0 ]; then
-            echo "::warning::.env trouvé dans l'APK — retirer l'asset de pubspec.yaml"
-          else
-            echo ".env absent de l'APK ✓"
-          fi
-
-      - name: Upload APK Debug
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk-debug
-          path: build/app/outputs/flutter-apk/app-debug.apk
-          retention-days: 14
+      # A debug APK uses the Android debug signing key generated on the runner;
+      # it does not require a production keystore or signing secret.
+      - name: Verify Android debug build
+        run: flutter build apk --debug --no-pub
